@@ -189,9 +189,53 @@ def check_database() -> Result:
     return Result("database", PASS, f"{skus} SKUs, {sales:,} sales, {deliveries} deliveries, stock as of {latest}")
 
 
+def check_analytics() -> Result:
+    """mk4: the calculation core runs end to end on the current data (quick: no forecast models are fitted)."""
+    import numpy as np
+    from sqlmodel import select
+
+    from sarthi.analytics import basket, budget, data, montecarlo, policy, topsis, transfer
+    from sarthi.analytics.forecast import uncensor, weekday_mean_forecast
+    from sarthi.db import session
+    from sarthi.models import Sku
+
+    sales, stock = data.store_frames()
+    if sales.empty:
+        return Result("analytics", WARN, "no sales history to analyse; run `uv run sarthi seed`")
+    sku_id = sales.groupby("sku_id")["qty"].sum().idxmax()
+    sold = sales[sales["sku_id"] == sku_id].sort_values("day")["qty"].to_numpy()
+    held = stock[stock["sku_id"] == sku_id].sort_values("day")["on_hand"].to_numpy()
+    mu = weekday_mean_forecast(uncensor(sold, held), 30)
+    mc = montecarlo.simulate(float(held[-1]), [], mu, 8.0, np.array([5.0]), 500, montecarlo.sku_seed(1, sku_id))
+    safety, rop = policy.reorder_point(mc.ltd, 0.95)
+    with session() as s:
+        names = dict(s.exec(select(Sku.id, Sku.name)).all())
+    rules = basket.mine_rules(data.basket_frame(), names)
+
+    ideal = {name: best for name, (best, _) in topsis.CRITERIA.items()}
+    worst = {name: anti for name, (_, anti) in topsis.CRITERIA.items()}
+    problems = []
+    if not (0.0 <= mc.stockout_prob <= 1.0 and rop >= safety >= 0 and len(montecarlo.histogram(mc.lost_frac)) == 20):
+        problems.append("stockout simulation returned out-of-range values")
+    if topsis.score([ideal, worst], "Balanced") != [100.0, 0.0]:
+        problems.append("supplier scoring anchors moved")
+    if budget.fund_orders(np.array([5.0, 9.0]), np.array([10.0, 10.0]), 10).tolist() != [0, 1]:
+        problems.append("budget optimiser gave a wrong answer")
+    moves = transfer.plan_transfers({"A": 100}, {"B": 60}, {("A", "B"): 5.0}, {"B": 20.0})
+    if [m["units"] for m in moves] != [60]:
+        problems.append("transfer optimiser gave a wrong answer")
+    if problems:
+        return Result("analytics", FAIL, "; ".join(problems))
+    return Result(
+        "analytics", PASS,
+        f"{sku_id}: {mc.stockout_prob:.0%} stockout risk, reorder point {rop}; {len(rules)} basket rules; optimisers ok",
+    )
+
+
 # Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
+    check_analytics,
 ]
 
 

@@ -252,3 +252,21 @@ chosen = np.round(res.x).astype(int) if res.success else greedy_by_ratio(values,
 ## Done when
 
 All analytics tests pass and `forecast_all` on the seeded data finishes in under 60 seconds.
+
+## Implementation notes (as built, 2026-10-08)
+
+Deviations from the text above, verified by `tests/analytics/` (54 tests) on the seeded data:
+
+- **Forecast speed.** The plan's model set took 62-93 s. Two changes brought it to about 30 s: the exponential-smoothing candidate uses `AutoETS(season_length=7, model="ZZA")` (additive season only; daily error identical to the full search within 0.01), and the 12-block back-cast uses `AutoETS(model="ZNA")` refitted per block. `refit=False` was tried for the back-cast and rejected: it returned flat, badly-off values.
+- **Two error figures.** `ForecastResult.wape` is the error on **14-day totals** (the planning horizon); `wape_daily` is the plan's daily figure. Daily error for slow movers sits at 0.5-0.6 purely from count noise, so it is a poor reliability signal. Models are still selected on daily error. mk8's confidence formula should use `wape` (seeded values: 0.06-0.23).
+- **`ForecastResult.last_day`** added (needed to align an uploaded external forecast).
+- **`forecast_all(..., external=None)`** takes the external forecast as a frame; the caller reads the file, keeping the module pure.
+- **`analytics/data.py`** (new) loads `sales_daily` / `stock_daily` / basket frames from the database. Unknown stock is NaN, not zero.
+- **Hysteresis signature** is `with_hysteresis(new_zone, previous_zone, previous_raw)`. The snapshot must store the raw (unsmoothed) zone alongside the final one (mk6).
+- **Cannibalization is a substitution-uplift test, not a correlation threshold.** On the seeded data the plan's smoothed correlation never went below -0.21 even for the true pair, because same-category products share weekday and growth patterns. The test compares the rising SKU's sales (relative to its trailing 28-day normal) on days the falling SKU was out of stock against other days, using only days the rising SKU was itself in stock. Flag when uplift >= 15 %, t >= 3, and >= 5 event days in the last 365. True pairs score t = 5-11; reversed pairs about 0. `correlation` in the output is the correlation between the falling SKU's availability and the rising SKU's relative sales (negative).
+- **Basket `min_support` default is 0.01** (plan: 0.05), otherwise rules for slow movers never qualify. Rules carry `antecedent_ids` / `consequent_id` in addition to names.
+- **Seed generator change (mk2):** products that lead to others now start baskets first, so add-on products are not sold out as basket starters. Mined confidence for Amul Butter -> Parle-G went from 0.45 to about 0.67 (catalogue value 0.72).
+- **Bullwhip reorder threshold is 3 %** (plan: 8 %); total weekly demand rarely moves 8 %, so no signal ever fired.
+- **Phantom inventory, "sold while empty"** requires the day to both open and close at zero stock with no delivery that day. A day that merely closes at zero is an ordinary stockout.
+- **`esg.options` takes a `risk(days)` callback** for stockout probability and shortage value per transit time; `esg.recommend(options, mode)` picks the lowest total of freight, priced carbon and stockout exposure.
+- **`policy.apply_safety_multiplier`** added for the strategy / per-SKU safety-stock scaling.

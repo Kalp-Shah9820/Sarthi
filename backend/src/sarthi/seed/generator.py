@@ -171,11 +171,15 @@ def _baskets(days: list[date], sold: dict[str, np.ndarray], prices: dict[str, fl
     py_rng = random.Random(seed)
     ids = list(sold)
     rules = [(frozenset(a), c, p) for a, c, p in cat.BASKET_AFFINITY]
+    leaders = {sku_id for antecedents, _, _ in rules for sku_id in antecedents}
     rows: list[dict] = []
     for t, day in enumerate(days):
         remaining = {sku_id: int(sold[sku_id][t]) for sku_id in ids}
         units = [sku_id for sku_id in ids for _ in range(remaining[sku_id])]
         py_rng.shuffle(units)  # walking a shuffled list picks first items in proportion to units sold
+        # Products that lead to others start baskets first, so their add-ons are still on the shelf.
+        # Without this, add-on products sell out as basket starters and the rules come out far too weak.
+        units.sort(key=lambda sku_id: sku_id not in leaders)
         tag, count = day.strftime("%y%m%d"), 0
         for first in units:
             if remaining[first] == 0:  # already used as someone else's add-on

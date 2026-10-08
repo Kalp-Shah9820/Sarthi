@@ -19,10 +19,11 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 | Backend milestone 1: project setup | Done. The server starts and answers a health check. |
 | Backend milestone 2: database and demo data | Done. 18 months of sales, stock and delivery history for the 10 demo products. |
 | Backend milestone 3: file ingestion | Done. The 8 Data Hub file types can be read, checked and stored (from code; the upload button is connected in milestone 9). |
-| Backend milestones 4–10: analytics, agents, API | Not built yet. |
+| Backend milestone 4: analytics | Done. Forecasting, stockout simulation, zones, Profit-at-Risk, supplier scoring, basket analysis and the transfer and budget optimisers, as tested calculation code. |
+| Backend milestones 5–10: agents, API | Not built yet. |
 | Milestone 11: connecting the screens to the backend | Not built yet. |
 
-So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history but does not yet analyse it or serve it to the screens.
+So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history and can analyse it, but no agent runs the analysis yet and nothing is served to the screens.
 
 ## What you need installed
 

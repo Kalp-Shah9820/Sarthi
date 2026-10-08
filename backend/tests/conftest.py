@@ -41,3 +41,23 @@ def seeded_db(isolated_settings):
 
     init_db()
     return seed_database(TEST_SEED, today=TEST_TODAY)
+
+
+@pytest.fixture(scope="session")
+def store_data(seeded_db):
+    """(sales_daily, stock_daily) for the store, loaded once."""
+    from sarthi.analytics import data
+
+    return data.store_frames()
+
+
+@pytest.fixture(scope="session")
+def forecasts(store_data):
+    """Forecasts for every seeded SKU, computed once (the slowest step in the suite) with its run time."""
+    import time
+
+    from sarthi.analytics.forecast import forecast_all
+
+    started = time.perf_counter()
+    results = forecast_all(*store_data)
+    return results, time.perf_counter() - started
