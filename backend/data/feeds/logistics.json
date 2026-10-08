@@ -1,0 +1,14 @@
+[
+  {
+    "type": "LOGISTICS",
+    "region_key": "jnptMumbai",
+    "severity": "HIGH",
+    "icon": "Anchor",
+    "msg": "Port congestion at JNPT Mumbai is adding about 2 days to inbound shipments.",
+    "msg_key": "riskMsgLogistics",
+    "lead_modifier": 1.25,
+    "demand_multiplier": 1.0,
+    "categories": [],
+    "active": true
+  }
+]

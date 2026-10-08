@@ -106,8 +106,44 @@ def check_llm() -> Result:
     return Result("llm", PASS, f"LM Studio lists {s.llm_model}")
 
 
-# Later milestones append their checks here (database seeded, pipeline run completes, ...).
-CHECKS: list[Callable[[], Result]] = [check_dependencies, check_imports, check_config, check_api, check_llm]
+def check_database() -> Result:
+    """mk2: tables exist, data is seeded, and the basic integrity rules hold."""
+    from sqlmodel import func, select
+
+    from sarthi.db import init_db, session
+    from sarthi.models import Delivery, Sale, Sku, StockDaily, Supplier
+
+    init_db()
+    with session() as s:
+        skus = s.exec(select(func.count()).select_from(Sku)).one()
+        if skus == 0:
+            return Result("database", WARN, "tables exist but are empty; run `uv run sarthi seed`")
+        sales = s.exec(select(func.count()).select_from(Sale)).one()
+        suppliers = s.exec(select(func.count()).select_from(Supplier)).one()
+        deliveries = s.exec(select(func.count()).select_from(Delivery)).one()
+        negative = s.exec(select(func.count()).select_from(StockDaily).where(StockDaily.on_hand < 0)).one()
+        orphans = s.exec(
+            select(func.count()).select_from(Sale).where(Sale.sku_id.not_in(select(Sku.id)))
+        ).one()
+        latest = s.exec(select(func.max(StockDaily.day))).one()
+    problems = []
+    if negative:
+        problems.append(f"{negative} stock rows are negative")
+    if orphans:
+        problems.append(f"{orphans} sales reference unknown SKUs")
+    if sales == 0:
+        problems.append("no sales history")
+    if suppliers == 0:
+        problems.append("no suppliers")
+    if problems:
+        return Result("database", FAIL, "; ".join(problems))
+    return Result("database", PASS, f"{skus} SKUs, {sales:,} sales, {deliveries} deliveries, stock as of {latest}")
+
+
+# Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
+CHECKS: list[Callable[[], Result]] = [
+    check_dependencies, check_imports, check_config, check_api, check_llm, check_database,
+]
 
 
 def _run_tool(name: str, cmd: list[str], cwd) -> Result:

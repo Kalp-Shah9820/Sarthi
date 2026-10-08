@@ -4,11 +4,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from sarthi.config import get_settings
+from sarthi.db import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # mk2 adds init_db(); mk5 adds the LLM probe; mk8 adds the first pipeline run
+    init_db()
+    # mk5 adds the LLM probe; mk8 adds the first pipeline run
     yield
 
 

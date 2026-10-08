@@ -20,7 +20,8 @@ def test_cors_allows_vite_dev_origin():
     assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
-def test_settings_defaults_and_paths():
+def test_settings_defaults_and_paths(monkeypatch):
+    monkeypatch.delenv("SARTHI_DB_PATH", raising=False)  # conftest points tests at a temporary database
     s = Settings(_env_file=None)
     assert s.llm_base_url == "http://localhost:1234/v1"
     assert s.llm_reasoning_headroom == 0
@@ -57,9 +58,11 @@ def test_validator_core_checks_pass():
     assert validate.check_imports().status == validate.PASS
     assert validate.check_api().status == validate.PASS
     assert validate.check_config().status in (validate.PASS, validate.WARN)
+    assert validate.check_database().status in (validate.PASS, validate.WARN)  # WARN = not seeded yet
 
 
 def test_validator_llm_check_never_fails_when_server_is_down(monkeypatch):
+    monkeypatch.setenv("SARTHI_LLM_ENABLED", "true")
     monkeypatch.setenv("SARTHI_LLM_BASE_URL", "http://127.0.0.1:9/v1")  # nothing listens on port 9
     get_settings.cache_clear()
     try:

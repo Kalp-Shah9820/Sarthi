@@ -172,3 +172,17 @@ Expected: `10`, a sale-row count in the hundreds of thousands, and ≥ 120 deliv
 ## Done when
 
 `uv run pytest tests/test_seed.py` passes and `data/sarthi.db` exists.
+
+## Implementation notes (as built, 2026-10-08)
+
+Deviations from the text above, made while building and verified by `tests/test_seed.py`:
+
+- **Timestamps are timezone-aware UTC**, not naive. The installed SQLModel (0.0.48) rejects naive datetimes. `models.utcnow()` returns `datetime.now(UTC)`; `models.local_today()` gives the local business date.
+- **Legacy reorder rule** is "reorder below 1.5 lead-times of demand, order 2 lead-times" (not "below 1 lead-time"). The stricter rule stocked out on about half of all cycles for every SKU, which would have corrupted the history of healthy SKUs.
+- **Supplier lead time** for a SKU scales with the supplier's speed: `sku.lead x supplier.avgTAT / primary.avgTAT`. The mock's lead time therefore holds for the primary supplier, and switching a chaos SKU from the Bronze to the Gold supplier is genuinely faster. 70 % of legacy orders go to the primary; the rest to a non-Bronze alternative, so only chaos SKUs ever buy from the Bronze supplier.
+- **Pin window.** The last 14 days (or `age` days for ghost/money SKUs) have no new orders and start at the stock level that makes today's closing stock equal the mock's figure exactly. Orders that would have landed inside the window are dropped. A positive difference at the window start is booked as a delivery; a negative one is an unrecorded write-down.
+- **`Aisle`** also stores `heat`, `connections`, `zone` (the mock's values) as fallbacks for the store screen.
+- **Feeds** are written to `<database folder>/feeds`, exposed as `settings.feeds_dir`, so tests do not write into the real data folder.
+- **Velocity test tolerance** is "within 25 % or within 3 standard errors". With 14 days of negative-binomial demand, slow movers legitimately vary by more than 25 %.
+- **Row counts** with the default seed: 167,171 sales, 501 deliveries (305 Gold, 119 Silver, 77 Bronze), 5,412 stock rows. Seeding takes about 4 seconds.
+- `sarthi seed` takes no `--reset` flag; it always wipes and reloads.

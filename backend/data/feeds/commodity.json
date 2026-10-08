@@ -1,0 +1,16 @@
+[
+  {
+    "type": "COMMODITY",
+    "region_key": "",
+    "severity": "MEDIUM",
+    "icon": "TrendingUp",
+    "msg": "Palm oil prices are rising; edible oil costs are under pressure.",
+    "msg_key": "riskMsgCommodity",
+    "lead_modifier": 1.0,
+    "demand_multiplier": 0.97,
+    "categories": [
+      "Edible Oil"
+    ],
+    "active": true
+  }
+]

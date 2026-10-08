@@ -36,6 +36,11 @@ class Settings(BaseSettings):
         return p if p.is_absolute() else BACKEND_ROOT / p
 
     @property
+    def feeds_dir(self) -> Path:
+        """Simulated external feeds live next to the database."""
+        return self.db_file.parent / "feeds"
+
+    @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
