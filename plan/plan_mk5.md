@@ -232,3 +232,18 @@ uv run python -c "import asyncio; from sarthi.config import get_settings; from s
 ## Done when
 
 Tests pass, and the live probe prints `llm` with LM Studio open and `offline` with it closed.
+
+## Implementation notes (as built, 2026-10-08)
+
+Deviations from the text above, verified by `tests/test_blackboard.py`, `tests/test_llm.py`, `tests/test_grounding.py` (55 tests, plus one live-model test):
+
+- **Budget counts only real model calls.** A cached answer is free and is served even when LM Studio is closed, so a demo keeps its wording offline. `llm_max_calls_per_run` (default 12) is a setting.
+- **Gateway methods take `task=`** (a short label) and write an `llm` event per call with result `ok`, `fallback` or `ungrounded` when a `run_id` is given.
+- **`raw_reply()`** makes one uncached, unchecked call for diagnostics; the validator uses it for its live check.
+- **`/api/health` re-probes on every call**, so opening or closing LM Studio shows up immediately as `"llm"` or `"offline"`.
+- **Blackboard extras:** `metric(agent, sku_id=None, key=None, **values)`, `metrics(key=, sku_id=)`, `end()`, and module functions `subscribe`, `unsubscribe`, `publish`, `end_run`, `write_event`, `delete_run_events`, `local_time`. `say()` rejects unknown stances.
+- **Grounding** also treats `K`, `lakh`, `crore`, `percent` after a number and a currency sign before it as units, so "costs Rs 4" must be a fact while "4 suppliers" need not be. The tolerance is 1.1 %: 250 for a true 247.3 passes, 255 does not. Numbers written as words ("two") are not checked.
+- **Templates** cover the 7 alert types and the opening supplier email, in English and Hindi. Debate-line templates are written with the Arbiter in mk8, where the rule names are defined. `templates.fields()` lists the facts a template needs.
+- **Timestamps:** `local_time()` treats a stored time without timezone as UTC.
+- **Forecast speed check moved out of pytest.** `forecast_all` took 22-32 s on mains power and 74-230 s on battery (the CPU is throttled). The unit test no longer asserts a wall-clock limit; `uv run sarthi validate --perf` reports the time against the 60 s budget as a warning.
+- **Live-model test** runs only with `SARTHI_TEST_LLM=1`; otherwise it is skipped (1 skipped in the normal suite).

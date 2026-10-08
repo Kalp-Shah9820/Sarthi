@@ -37,6 +37,7 @@ packages = ["src/sarthi"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["llm: needs the real local model in LM Studio (run with SARTHI_TEST_LLM=1)"]
 
 [tool.ruff]
 line-length = 110

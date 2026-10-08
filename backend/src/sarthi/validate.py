@@ -232,10 +232,105 @@ def check_analytics() -> Result:
     )
 
 
+VALIDATION_RUN_ID = -1  # events written by the validator use this id and are removed afterwards
+
+
+def check_agent_core() -> Result:
+    """mk5: blackboard, wording templates, grounding check and the model gateway (offline and, if up, live)."""
+    import asyncio
+    import time
+
+    from pydantic import BaseModel
+
+    from sarthi.blackboard.store import Blackboard, delete_run_events
+    from sarthi.config import get_settings
+    from sarthi.llm import prompts, templates
+    from sarthi.llm.gateway import LlmGateway
+    from sarthi.llm.grounding import grounded
+
+    problems = []
+
+    facts = {"prob": 0.84, "qty": 1482, "par": 18500, "name": "Lays Classic 26g"}
+    if not grounded("84% stockout risk on Lays Classic 26g; order 1,482 units to protect \u20b918.5K", facts):
+        problems.append("grounding rejected a correct sentence")
+    if grounded("Order 1,500 units of Lays Classic 26g", facts):
+        problems.append("grounding accepted an invented number")
+
+    for kind in templates.ALERT:
+        for lang in ("EN", "HI"):
+            dummy = dict.fromkeys(templates.fields("alert", kind, lang), 7)
+            if set(templates.render("alert", kind, lang, **dummy)) != {"msg", "action", "impact"}:
+                problems.append(f"alert template {kind}/{lang} is incomplete")
+
+    bb = Blackboard(VALIDATION_RUN_ID)
+    try:
+        bb.put("validator", "sense", "lead_time_risk", "LOW")
+        bb.put("validator", "sense", "lead_time_risk", "HIGH")
+        bb.act("validator", "sense", "checked the blackboard", result="ok")
+        if bb.get("lead_time_risk") != "HIGH" or len(bb.context()) != 1 or len(bb.events(kind="action")) != 1:
+            problems.append("blackboard did not return what was written")
+    finally:
+        delete_run_events(VALIDATION_RUN_ID)
+
+    class Probe(BaseModel):
+        ok: bool
+
+    async def exercise() -> tuple[str, float]:
+        offline = LlmGateway(get_settings())            # mode stays "offline": must fall back without any call
+        if (await offline.json(Probe, "s", "u", fallback=lambda: Probe(ok=False))).ok:
+            problems.append("offline gateway did not use the fallback")
+        live = LlmGateway(get_settings())
+        if await live.probe() != "llm":
+            return "offline", 0.0
+        said = {"name": "Lays Classic 26g", "days_of_cover": 1.6, "lead_time_days": 12, "stockout_probability_pct": 97}
+        started = time.perf_counter()
+        raw = await live.raw_reply(prompts.NARRATE_ALERT, prompts.user_message(said), max_tokens=120)
+        seconds = time.perf_counter() - started
+        if raw is None:
+            return "no-reply", seconds
+        return ("ok" if grounded(raw, said) else "ungrounded"), seconds
+
+    outcome, seconds = asyncio.run(exercise())
+    if problems:
+        return Result("agent core", FAIL, "; ".join(problems))
+    base = "blackboard, templates and grounding ok"
+    if outcome == "offline":
+        return Result("agent core", WARN, f"{base}; model offline, so template wording will be used")
+    if outcome == "no-reply":
+        return Result("agent core", WARN,
+                      f"{base}; model listed but gave no usable reply in {seconds:.0f}s (wrong or thinking model?)")
+    if outcome == "ungrounded":
+        return Result("agent core", PASS,
+                      f"{base}; live reply in {seconds:.1f}s was rejected by the grounding check (template used)")
+    return Result("agent core", PASS, f"{base}; live grounded reply in {seconds:.1f}s")
+
+
+FORECAST_BUDGET_S = 60
+
+
+def check_performance() -> Result:
+    """Time the slowest step (forecasting every SKU). A warning, not a failure: it depends on machine load."""
+    import time
+
+    from sarthi.analytics import data
+    from sarthi.analytics.forecast import forecast_all
+
+    sales, stock = data.store_frames()
+    if sales.empty:
+        return Result("performance", WARN, "no sales history; run `uv run sarthi seed`")
+    started = time.perf_counter()
+    results = forecast_all(sales, stock)
+    seconds = time.perf_counter() - started
+    detail = f"forecast for {len(results)} SKUs took {seconds:.0f}s (budget {FORECAST_BUDGET_S}s)"
+    if seconds > FORECAST_BUDGET_S:
+        return Result("performance", WARN, detail + "; check power mode (battery throttles the CPU) and other load")
+    return Result("performance", PASS, detail)
+
+
 # Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics,
+    check_analytics, check_agent_core,
 ]
 
 
@@ -250,7 +345,7 @@ def _run_tool(name: str, cmd: list[str], cwd) -> Result:
     return Result(name, PASS if proc.returncode == 0 else FAIL, tail[:160])
 
 
-def run(full: bool = False, frontend: bool = False) -> list[Result]:
+def run(full: bool = False, frontend: bool = False, perf: bool = False) -> list[Result]:
     from sarthi.config import BACKEND_ROOT
 
     results = []
@@ -259,6 +354,8 @@ def run(full: bool = False, frontend: bool = False) -> list[Result]:
             results.append(check())
         except Exception as exc:  # a crashing check is itself a failure, not a crash of the validator
             results.append(Result(check.__name__.removeprefix("check_"), FAIL, f"{type(exc).__name__}: {exc}"))
+    if perf:
+        results.append(check_performance())
     if full:
         results.append(_run_tool("ruff", [sys.executable, "-m", "ruff", "check", "src", "tests"], BACKEND_ROOT))
         results.append(_run_tool("pytest", [sys.executable, "-m", "pytest", "-q"], BACKEND_ROOT))

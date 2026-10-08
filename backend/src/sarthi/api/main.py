@@ -5,12 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from sarthi.config import get_settings
 from sarthi.db import init_db
+from sarthi.llm import get_llm
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # mk5 adds the LLM probe; mk8 adds the first pipeline run
+    app.state.llm = get_llm()
+    await app.state.llm.probe()
+    # mk8 adds the first pipeline run
     yield
 
 
@@ -21,7 +24,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health():
-        return {"status": "ok", "llm": getattr(app.state, "llm_mode", "unknown")}
+        llm = getattr(app.state, "llm", None)
+        return {"status": "ok", "llm": await llm.probe() if llm else "unknown"}
 
     return app
 

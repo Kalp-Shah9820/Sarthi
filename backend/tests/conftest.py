@@ -5,6 +5,7 @@ import pytest
 
 from sarthi.config import get_settings
 from sarthi.db import init_db, reset_engine
+from sarthi.llm import reset_llm
 
 TEST_TODAY = date(2026, 10, 1)  # fixed "today" so seeded data is identical on every run
 TEST_SEED = 1
@@ -24,14 +25,22 @@ def isolated_settings(tmp_path_factory):
     os.environ.update(env)
     get_settings.cache_clear()
     reset_engine()
+    reset_llm()
     yield root
     reset_engine()
+    reset_llm()
     for key, value in previous.items():
         if value is None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
     get_settings.cache_clear()
+
+
+@pytest.fixture(scope="session")
+def db(isolated_settings):
+    """The test database with tables created (it may or may not be seeded)."""
+    init_db()
 
 
 @pytest.fixture(scope="session")

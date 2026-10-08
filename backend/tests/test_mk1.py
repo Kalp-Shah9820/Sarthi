@@ -11,7 +11,7 @@ def test_health_endpoint():
     with TestClient(create_app()) as client:
         r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "llm": "unknown"}
+    assert r.json() == {"status": "ok", "llm": "offline"}  # tests run with the model switched off
 
 
 def test_cors_allows_vite_dev_origin():

@@ -41,9 +41,9 @@ def export_samples_cmd():
 
 
 @app.command()
-def validate(full: bool = False, frontend: bool = False):
-    """Check that every milestone built so far still works. --full adds ruff and pytest."""
+def validate(full: bool = False, frontend: bool = False, perf: bool = False):
+    """Check that every milestone built so far still works. --full adds ruff and pytest; --perf times forecasting."""
     from sarthi.validate import report, run
 
-    ok = report(run(full=full, frontend=frontend))
+    ok = report(run(full=full, frontend=frontend, perf=perf))
     raise typer.Exit(0 if ok else 1)

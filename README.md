@@ -20,7 +20,8 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 | Backend milestone 2: database and demo data | Done. 18 months of sales, stock and delivery history for the 10 demo products. |
 | Backend milestone 3: file ingestion | Done. The 8 Data Hub file types can be read, checked and stored (from code; the upload button is connected in milestone 9). |
 | Backend milestone 4: analytics | Done. Forecasting, stockout simulation, zones, Profit-at-Risk, supplier scoring, basket analysis and the transfer and budget optimisers, as tested calculation code. |
-| Backend milestones 5–10: agents, API | Not built yet. |
+| Backend milestone 5: agent foundations | Done. Shared event log for agents, the local-model connection with safe fallbacks, and the check that stops the model inventing numbers. |
+| Backend milestones 6–10: agents, API | Not built yet. |
 | Milestone 11: connecting the screens to the backend | Not built yet. |
 
 So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history and can analyse it, but no agent runs the analysis yet and nothing is served to the screens.
@@ -82,7 +83,7 @@ It listens on `http://127.0.0.1:8000`. Check it with:
 
 ```powershell
 curl.exe http://127.0.0.1:8000/api/health
-# {"status":"ok","llm":"unknown"}
+# {"status":"ok","llm":"llm"}       "llm" = LM Studio is serving the model, "offline" = it is not
 ```
 
 Interactive API documentation is at `http://127.0.0.1:8000/docs`.
@@ -137,6 +138,7 @@ Individual checks:
 | `uv run pytest -q` | Runs the tests |
 | `uv run ruff check src tests` | Lints the code |
 | `uv run sarthi validate` | Quick checks only, a few seconds |
+| `uv run sarthi validate --perf` | Also times the forecasting step against its 60-second budget |
 | `uv run sarthi seed` | Resets the database to the demo state |
 | `uv run sarthi export-samples` | Writes the 8 example upload files into `backend/samples` |
 | `uv run sarthi version` | Prints the backend version |
@@ -150,6 +152,8 @@ Individual checks:
 | `validate` shows `WARN` for `database` | The database is empty. Run `uv run sarthi seed`. |
 | `validate` shows `FAIL ... schema is out of date` | The code gained new database columns. Run `uv run sarthi seed` to rebuild (this erases current data). |
 | `validate` shows `WARN` for `ingest` | The sample files are missing. Run `uv run sarthi export-samples`. |
+| Tests or forecasting are several times slower than usual | The laptop is on battery, which throttles the processor. Plug it in. |
+| VS Code underlines `import sarthi...` as unresolved | Select the interpreter `backend\.venv\Scripts\python.exe` (Ctrl+Shift+P, "Python: Select Interpreter"). The code runs fine either way. |
 | Port 8000 already in use | Another backend is running. Stop it, or start with `uv run sarthi serve --port 8001`. |
 | Screens show the same numbers regardless of the backend | Expected for now: the screens are connected to the backend in milestone 11. |
 

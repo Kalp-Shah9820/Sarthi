@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     llm_enabled: bool = True
     llm_timeout_s: float = 45.0
     llm_reasoning_headroom: int = 0
+    llm_max_calls_per_run: int = 12      # uncached model calls one pipeline run may make
     weather_enabled: bool = True
     mc_paths: int = 2000
     seed: int = 20261005
