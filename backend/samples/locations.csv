@@ -1,0 +1,6 @@
+Location_ID,Name,City,Lat,Long,Capacity,Kind
+STORE-01,Sarthi Store Mumbai,Mumbai,19.08,72.88,5000,store
+WH-BLR,Bangalore South,Bangalore,12.97,77.59,1800,warehouse
+WH-CHN,Chennai Port,Chennai,13.08,80.27,1500,warehouse
+WH-DEL,Delhi NCR Hub,Delhi,28.61,77.21,3000,warehouse
+WH-MUM,Mumbai Central,Mumbai,19.08,72.88,2000,warehouse

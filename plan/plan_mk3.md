@@ -102,3 +102,20 @@ uv run pytest tests/test_ingest.py
 ## Done when
 
 All ingest tests pass and `backend/samples/` holds 8 files.
+
+## Implementation notes (as built, 2026-10-08)
+
+Deviations from the text above, verified by `tests/test_ingest.py` (27 tests):
+
+- **Result shape** is `{"records", "inserted", "dropped", "errors", "time"}`. `records` = valid rows read; `inserted` = rows actually written (0 when a sales file is re-uploaded).
+- **Two new columns**: `Sku.lead_time_days` (from the SKU file's `Lead_Time`) and `Supplier.avg_tat_days` (from the vendor file's `Lead_Time`). They are the fallback lead times for items with no delivery history. Existing databases must be rebuilt with `uv run sarthi seed`; `sarthi validate` reports this as "schema is out of date".
+- **ESG score is absolute, not relative**: `esg_score = clip(100 - carbon_kg / 25, 0, 100)`, with `Carbon_kg` read as kg CO2e per tonne delivered. The plan's relative formula would always score the file's highest emitter at 40 and get it banned, however good it was.
+- **Risk upload replaces earlier uploaded signals** (never feed or weather signals), so re-uploading does not duplicate them.
+- **Stock `transit`** is the total on its way. Open inbound is replaced only when that total differs from what is already recorded, so re-uploading the sample keeps the seeded arrival dates.
+- **Stock rows for an unknown warehouse are rejected** with "upload the Locations file first".
+- **Vendor rows** are unique per `supplier_id + sku_id`, so one supplier can list prices for many SKUs. A new price link becomes primary only if the SKU has no primary supplier yet.
+- **All CSV and Excel cells are read as text**, so ids such as `00123` keep their leading zeros.
+- **`check_file(upload_type, filename, data)`** validates without writing; `sarthi validate` uses it on the sample files.
+- **Sample risk file** holds two extra signals placed away from the demo's supply routes, so uploading it does not change which zone any SKU falls in.
+- **Round trip**: uploading the six data samples (sku, locations, vendor, sales, stock, esg) leaves the seeded database unchanged.
+- The upload HTTP endpoint is still planned for mk9; ingestion is callable from Python only for now.

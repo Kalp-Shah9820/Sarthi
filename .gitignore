@@ -29,6 +29,7 @@ dist-ssr
 # Sarthi backend
 backend/.venv
 backend/data/sarthi.db*
+backend/data/external_forecast.csv
 backend/outbox/
 backend/.env
 __pycache__/

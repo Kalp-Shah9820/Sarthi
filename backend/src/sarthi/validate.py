@@ -106,6 +106,52 @@ def check_llm() -> Result:
     return Result("llm", PASS, f"LM Studio lists {s.llm_model}")
 
 
+def _schema_drift() -> str:
+    """Columns the code expects but the database file lacks (a model changed after the file was created)."""
+    from sqlalchemy import inspect
+    from sqlmodel import SQLModel
+
+    from sarthi.db import get_engine
+
+    inspector = inspect(get_engine())
+    missing = []
+    for table in SQLModel.metadata.sorted_tables:
+        have = {c["name"] for c in inspector.get_columns(table.name)}
+        missing += [f"{table.name}.{c.name}" for c in table.columns if c.name not in have]
+    return ", ".join(missing)
+
+
+def samples_dir():
+    from sarthi.config import BACKEND_ROOT
+
+    return BACKEND_ROOT / "samples"
+
+
+SAMPLE_FILES = {
+    "sku": "sku.csv", "sales": "sales.csv", "stock": "stock.json", "vendor": "vendor.xlsx",
+    "forecast": "forecast.csv", "risk": "risk.json", "locations": "locations.csv", "esg": "esg.xlsx",
+}
+
+
+def check_ingest() -> Result:
+    """mk3: every sample upload file still parses and validates (dry run, nothing is written)."""
+    from sarthi.ingest.loader import check_file
+
+    folder = samples_dir()
+    present = {t: folder / name for t, name in SAMPLE_FILES.items() if (folder / name).exists()}
+    if len(present) < len(SAMPLE_FILES):
+        return Result("ingest", WARN, f"{len(present)} of 8 sample files found; run `uv run sarthi export-samples`")
+    problems, rows = [], 0
+    for upload_type, path in present.items():
+        clean, _, dropped = check_file(upload_type, path.name, path.read_bytes())
+        rows += len(clean)
+        if dropped or clean.empty:
+            problems.append(f"{path.name}: {dropped} rows rejected")
+    if problems:
+        return Result("ingest", FAIL, "; ".join(problems) + " (reseed and re-export if the data changed)")
+    return Result("ingest", PASS, f"8 sample files validate, {rows:,} rows")
+
+
 def check_database() -> Result:
     """mk2: tables exist, data is seeded, and the basic integrity rules hold."""
     from sqlmodel import func, select
@@ -114,6 +160,9 @@ def check_database() -> Result:
     from sarthi.models import Delivery, Sale, Sku, StockDaily, Supplier
 
     init_db()
+    drift = _schema_drift()
+    if drift:
+        return Result("database", FAIL, f"schema is out of date ({drift}); run `uv run sarthi seed` to rebuild it")
     with session() as s:
         skus = s.exec(select(func.count()).select_from(Sku)).one()
         if skus == 0:
@@ -142,7 +191,7 @@ def check_database() -> Result:
 
 # Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
 CHECKS: list[Callable[[], Result]] = [
-    check_dependencies, check_imports, check_config, check_api, check_llm, check_database,
+    check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
 ]
 
 

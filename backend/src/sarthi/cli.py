@@ -28,6 +28,18 @@ def seed():
     typer.echo("seeded: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
 
 
+@app.command("export-samples")
+def export_samples_cmd():
+    """Write one example upload file per Data Hub card into backend/samples."""
+    from sarthi.config import BACKEND_ROOT
+    from sarthi.db import init_db
+    from sarthi.seed.samples import export_samples
+
+    init_db()
+    paths = export_samples(BACKEND_ROOT / "samples")
+    typer.echo("samples written: " + ", ".join(p.name for p in paths))
+
+
 @app.command()
 def validate(full: bool = False, frontend: bool = False):
     """Check that every milestone built so far still works. --full adds ruff and pytest."""

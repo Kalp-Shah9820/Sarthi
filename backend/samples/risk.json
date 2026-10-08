@@ -1,0 +1,26 @@
+[
+  {
+    "Signal_ID": "SIG-1001",
+    "Type": "LOGISTICS",
+    "Severity": "MEDIUM",
+    "Region": "chennaiPort",
+    "Message": "Berth delays at Chennai Port are adding about a day to container clearance.",
+    "Lead_Modifier": 1.1,
+    "Demand_Multiplier": 1.0,
+    "SKUs_at_Risk": [
+      "SKU002",
+      "SKU004",
+      "SKU007"
+    ]
+  },
+  {
+    "Signal_ID": "SIG-1002",
+    "Type": "COMMODITY",
+    "Severity": "LOW",
+    "Region": "",
+    "Message": "Packaging material prices are easing; no action needed.",
+    "Lead_Modifier": 1.0,
+    "Demand_Multiplier": 1.0,
+    "SKUs_at_Risk": []
+  }
+]

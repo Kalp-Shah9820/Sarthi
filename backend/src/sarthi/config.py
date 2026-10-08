@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         return self.db_file.parent / "feeds"
 
     @property
+    def external_forecast_file(self) -> Path:
+        """An uploaded third-party forecast, blended into the system's own forecast when present."""
+        return self.db_file.parent / "external_forecast.csv"
+
+    @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 

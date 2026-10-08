@@ -22,6 +22,7 @@ class Sku(SQLModel, table=True):
     holding_cost_pct: float = 0.03  # share of COGS per month
     moq: int = 6
     aisle_id: str = "F"
+    lead_time_days: float = 3.0  # promised lead time from the primary supplier; used until deliveries exist
 
 
 class Location(SQLModel, table=True):
@@ -49,6 +50,7 @@ class Supplier(SQLModel, table=True):
     incentive_min_qty: int = 0
     incentive_pct: float = 0.0
     max_discount_pct: float = 0.0
+    avg_tat_days: float = 3.0  # typical turnaround; used until this supplier has delivery history
 
 
 class SkuSupplier(SQLModel, table=True):

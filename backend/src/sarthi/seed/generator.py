@@ -268,7 +268,7 @@ def build_dataset(seed: int, today: date) -> dict:
         "sku": [
             {"id": s["id"], "name": s["name"], "category": s["cat"], "cogs": float(s["cogs"]), "price": s["price"],
              "shelf_life_days": s["shelfLife"], "holding_cost_pct": s["holdingCostPct"], "moq": s["moq"],
-             "aisle_id": cat.AISLE_OF_CATEGORY.get(s["cat"], cat.DEFAULT_AISLE)}
+             "aisle_id": cat.AISLE_OF_CATEGORY.get(s["cat"], cat.DEFAULT_AISLE), "lead_time_days": float(s["lead"])}
             for s in skus
         ],
         "location": [{k: v for k, v in loc.items() if k != "stock"} for loc in cat.LOCATIONS],
@@ -277,7 +277,7 @@ def build_dataset(seed: int, today: date) -> dict:
              "email": s["email"], "capacity_limit": s["capacityLimit"], "defect_rate": s["defectRate"],
              "esg_score": float(s["esg_score"]), "incentive_text": s["incentive"],
              "incentive_min_qty": s["incentive_min_qty"], "incentive_pct": s["incentive_pct"],
-             "max_discount_pct": s["max_discount_pct"]}
+             "max_discount_pct": s["max_discount_pct"], "avg_tat_days": s["avgTAT"]}
             for s in cat.SUPPLIERS
         ],
         "sku_supplier": [

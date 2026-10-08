@@ -18,7 +18,8 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 | Frontend (React) | Complete. All screens work, currently on built-in sample data. |
 | Backend milestone 1: project setup | Done. The server starts and answers a health check. |
 | Backend milestone 2: database and demo data | Done. 18 months of sales, stock and delivery history for the 10 demo products. |
-| Backend milestones 3–10: uploads, analytics, agents, API | Not built yet. |
+| Backend milestone 3: file ingestion | Done. The 8 Data Hub file types can be read, checked and stored (from code; the upload button is connected in milestone 9). |
+| Backend milestones 4–10: analytics, agents, API | Not built yet. |
 | Milestone 11: connecting the screens to the backend | Not built yet. |
 
 So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history but does not yet analyse it or serve it to the screens.
@@ -60,6 +61,7 @@ cd backend
 uv sync
 Copy-Item .env.example .env    # skip if .env already exists
 uv run sarthi seed              # create the database and fill it with demo history (about 4 seconds)
+uv run sarthi export-samples    # write 8 example upload files into backend/samples
 ```
 
 `sarthi seed` wipes the database each time, so run it again whenever you want to return to the demo state.
@@ -135,6 +137,7 @@ Individual checks:
 | `uv run ruff check src tests` | Lints the code |
 | `uv run sarthi validate` | Quick checks only, a few seconds |
 | `uv run sarthi seed` | Resets the database to the demo state |
+| `uv run sarthi export-samples` | Writes the 8 example upload files into `backend/samples` |
 | `uv run sarthi version` | Prints the backend version |
 
 ## Troubleshooting
@@ -144,6 +147,8 @@ Individual checks:
 | `error: No pyproject.toml found` | You are in the repo root. Run `cd backend` first. |
 | `validate` shows `WARN` for `llm` | LM Studio's server is not running, or the model identifier in `.env` does not match the loaded model. The backend still works. |
 | `validate` shows `WARN` for `database` | The database is empty. Run `uv run sarthi seed`. |
+| `validate` shows `FAIL ... schema is out of date` | The code gained new database columns. Run `uv run sarthi seed` to rebuild (this erases current data). |
+| `validate` shows `WARN` for `ingest` | The sample files are missing. Run `uv run sarthi export-samples`. |
 | Port 8000 already in use | Another backend is running. Stop it, or start with `uv run sarthi serve --port 8001`. |
 | Screens show the same numbers regardless of the backend | Expected for now: the screens are connected to the backend in milestone 11. |
 
