@@ -25,3 +25,12 @@ dist-ssr
 
 # Vite
 .vite
+
+# Sarthi backend
+backend/.venv
+backend/data/sarthi.db*
+backend/outbox/
+backend/.env
+__pycache__/
+.pytest_cache/
+.ruff_cache/
