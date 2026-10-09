@@ -103,6 +103,9 @@ async def execute_run(run_id: int, *, lang: str = "EN") -> dict:
                     summary["alerts"] += out.get("alerts", [])
                     summary["executed"] += out.get("executed", [])
         summary["status"] = "failed" if summary["errors"] else "done"
+    except asyncio.CancelledError:              # a what-if replaced by a newer one
+        summary["status"] = "cancelled"
+        raise
     except Exception as exc:
         summary["status"] = "failed"
         summary["errors"].append(f"orchestrator: {type(exc).__name__}: {exc}")

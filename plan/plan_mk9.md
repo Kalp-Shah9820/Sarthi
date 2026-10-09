@@ -180,3 +180,24 @@ The second command prints debate lines one by one and ends with `event: done`.
 ## Done when
 
 API tests pass and the interactive docs at `http://127.0.0.1:8000/docs` list every endpoint in §1.
+
+## Implementation notes (as built, 2026-10-09)
+
+Verified by `tests/api/test_api.py` (26 tests) and by a live server with the model loaded. Code: `api/presenters.py`, `api/sse.py`, `api/routers/` (`read`, `runs`, `alerts`, `actions`, `sandbox`, `datahub`), `analytics/whatif.py`. Deviations from the text above:
+
+- **Not in this milestone:** `/api/chat`, `/api/strategy`, `/api/voice/intent` and `/api/skus/{id}/explain` belong to mk10 and are not registered yet. The other 12 endpoints are.
+- **`skuData[*].co2`** is the kg of CO2 for the recommended order by the recommended shipping mode, not per unit. Per unit it rounds to `0.00` for every product (a 26 g packet carried 150 km emits well under a gram).
+- **`riskSignals[*]`** always carry `msg`, and `msgKey` as well when the signal has a translation key.
+- **Shipping cards (`esg`)** are costed in the presenter from the same `esg.options` the agents use. For a product with a purchase alert the recommended card is the mode on that alert; for a product that needs no order it is the cheapest and cleanest mode (sea), since nothing is urgent.
+- **`drift`** uses the latest stored snapshot per day across runs (each run stores only the days it has not seen), padded at the front if fewer than 7 days exist.
+- **Bootstrap cache** key is `(database, run id, language, write counter)`. A run made by another process (`sarthi run`) changes the run id, so it is picked up too.
+- **Approve / dismiss.** The click, the execution and the approval-rate update happen before the response; only reading the feedback text runs afterwards. A lock makes a double click execute once. Approving a dismissed alert, or dismissing an approved one, returns 409. `memory.note_decision()` was split out of `learn_from_decision()` for this.
+- **Feedback learning is stricter** (found in the live check: for "good call" the model stored a sentence and a number the manager never wrote). The stored note is now always the manager's own words, and a number the manager did not write demotes the rule to a plain note.
+- **`POST /api/orders`**: the distributor may be given by id, full name or the short name on the charts; an unknown one is 404. The unattended-order limit is not applied (a person is placing the order). `expectedDelivery` is `"N–N+1 days"` from the supplier's lead time and the chosen mode. Rule breaches are written to the audit trail with the result "recorded on the manager's instruction".
+- **`POST /api/transfers`** also returns `units` actually moved; same source and destination is 400.
+- **`POST /api/runs`** returns the run already in progress if asked again while one is running.
+- **`GET /api/runs/{id}/stream`** replays what is already stored before going live, so it can be opened at any time, including after the run has finished. It carries `context`, `action`, `debate` and `error` events.
+- **What-if numbers** (`analytics/whatif.py`) use one set of simulated futures for all 16 lead times instead of calling `montecarlo.simulate` 16 times (about 130 ms). With nothing on order the two are identical, which a test asserts. Measured 8-19 ms per request over HTTP.
+- **What-if debate.** A new request cancels the previous one, and so does the listener leaving; a cancelled run is recorded with status `cancelled`. Earlier what-if runs have their events deleted, but their `Run` rows are kept: deleting them let SQLite give the same run id to a later run. Debate lines arrive together near the end of the run, because the Arbiter writes the debate once it has ruled. The first what-if after a server start takes as long as a first run (forecasts are fitted once per process); later ones take 1-2 s.
+- **Errors**: anything unforeseen is logged and answered as `500 {"detail": "internal error"}`.
+- **Validator**: `check_http_api` (read-only) checks that every endpoint is registered and that the bootstrap has the frontend's keys.

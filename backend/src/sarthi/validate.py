@@ -515,9 +515,60 @@ WARM_BUDGET_S = 10
 
 
 # Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
+HTTP_PATHS = (
+    "/api/health", "/api/bootstrap", "/api/runs", "/api/runs/{run_id}/stream", "/api/alerts/{alert_id}/approve",
+    "/api/alerts/{alert_id}/dismiss", "/api/orders", "/api/transfers", "/api/campaigns", "/api/sandbox/simulate",
+    "/api/sandbox/debate/stream", "/api/datahub/upload/{upload_type}",
+)
+BOOTSTRAP_KEYS = ("skuData", "skuMonteCarlo", "mbaRules", "cannibalization", "bullwhipData", "monthLabels", "forecastMonths",
+                  "distributors", "aisles", "labels", "live")
+BOOTSTRAP_LIVE_KEYS = ("online", "runId", "llmMode", "strategy", "pipeline", "riskSignals", "mapRisks", "drift", "alerts",
+                       "auditTrail", "sharedContext", "debate", "esg", "warehouses", "transfers", "campaigns",
+                       "distributorScores", "replenishment", "coPurchasePairs", "zoneStats", "dataHub")
+SKU_FIELD_COUNT = 29        # the 20 fields of the frontend's built-in data plus the 9 it invents on the Command Center
+
+
+def check_http_api() -> Result:
+    """mk9: every endpoint is registered and the screens' data has the shape the frontend reads. Read-only."""
+    from fastapi.testclient import TestClient
+
+    from sarthi.api.main import create_app
+
+    client = TestClient(create_app())       # no startup hooks: nothing is run or written
+    paths = client.get("/openapi.json").json()["paths"]
+    missing = [p for p in HTTP_PATHS if p not in paths]
+    if missing:
+        return Result("http api", FAIL, "endpoints missing: " + ", ".join(missing))
+    sim = client.post("/api/sandbox/simulate", json={"lead": 5, "demand": 50, "stock": 300, "margin": 20})
+    if sim.status_code != 200 or len(sim.json().get("sensitivity", [])) != 15:
+        return Result("http api", FAIL, f"/api/sandbox/simulate returned {sim.status_code}: {sim.text[:120]}")
+
+    r = client.get("/api/bootstrap")
+    if r.status_code == 503:
+        return Result("http api", WARN, f"{len(HTTP_PATHS)} endpoints registered; no completed run to show yet (`uv run sarthi run`)")
+    if r.status_code != 200:
+        return Result("http api", FAIL, f"/api/bootstrap returned {r.status_code}: {r.text[:120]}")
+    data = r.json()
+    problems = [f"missing '{k}'" for k in BOOTSTRAP_KEYS if k not in data]
+    problems += [f"missing live.{k}" for k in BOOTSTRAP_LIVE_KEYS if k not in data.get("live", {})]
+    for row in data.get("skuData", []):
+        if len(row) != SKU_FIELD_COUNT or len(row.get("forecast", [])) != 12 or len(row.get("sales", [])) != 12:
+            problems.append(f"{row.get('id')} has the wrong fields")
+    if not data.get("skuData"):
+        problems.append("no SKUs")
+    if any(len(d["zones"]) != 7 for d in data.get("live", {}).get("drift", {}).get("data", [])):
+        problems.append("drift is not 7 days")
+    if problems:
+        return Result("http api", FAIL, "; ".join(problems[:4]))
+    live = data["live"]
+    return Result("http api", PASS, f"{len(HTTP_PATHS)} endpoints; bootstrap {len(r.content) / 1024:.0f} KB from run #{live['runId']}: "
+                                    f"{len(data['skuData'])} SKUs, {len(live['alerts'])} alerts, {len(live['debate'])} debate lines; "
+                                    f"what-if risk {sim.json()['risk']}%")
+
+
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration,
+    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api,
 ]
 
 

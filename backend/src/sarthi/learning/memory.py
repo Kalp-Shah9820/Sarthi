@@ -94,8 +94,10 @@ async def remember_feedback(alert: Alert, decision: str, text: str, llm) -> Pref
         parsed = await llm.json(PreferenceOut, prompts.EXTRACT_PREFERENCE,
                                 f"Alert: {alert.msg}\nDecision: {decision}\nFeedback: {text}",
                                 fallback=lambda: fallback, task="preference")
-        if not parsed.note:
-            parsed.note = text.strip()
+        stated = {float(n) for n in re.findall(r"\d+(?:\.\d+)?", text)}
+        if parsed.value is not None and parsed.value not in stated:
+            parsed = fallback                # a number the manager never wrote: keep the feedback as a plain note
+        parsed.note = text.strip()           # the stored note is always the manager's own words
     preference = to_preference(parsed, alert.sku_id)
     with session() as s:
         s.add(preference)
@@ -121,8 +123,8 @@ def record_decision(alert: Alert, approved: bool) -> float:
     return delta
 
 
-async def learn_from_decision(alert_id: int, approved: bool, feedback: str | None, llm) -> dict:
-    """Everything that follows a manager's click, except executing the action itself."""
+def note_decision(alert_id: int, approved: bool, feedback: str | None) -> tuple[Alert, float]:
+    """Record the manager's click and update the approval rate. Returns the alert and the rate's change."""
     with session() as s:
         alert = s.get(Alert, alert_id)
         if alert is None:
@@ -134,7 +136,12 @@ async def learn_from_decision(alert_id: int, approved: bool, feedback: str | Non
         s.add(alert)
         s.commit()
         s.refresh(alert)
-    delta = record_decision(alert, approved)
+    return alert, record_decision(alert, approved)
+
+
+async def learn_from_decision(alert_id: int, approved: bool, feedback: str | None, llm) -> dict:
+    """Everything that follows a manager's click, except executing the action itself."""
+    alert, delta = note_decision(alert_id, approved, feedback)
     preference = await remember_feedback(alert, "approved" if approved else "dismissed", feedback or "", llm)
     return {"delta": delta, "preference": preference.directive if preference else None,
             "target": preference.target if preference else None}
