@@ -92,11 +92,14 @@ def test_decision_record_carries_display_fields(baseline):
 
 def test_seven_days_of_zone_history_are_stored(baseline):
     with session() as s:
-        rows = s.exec(select(SkuSnapshot).where(SkuSnapshot.run_id == RUN)).all()
+        everything = s.exec(select(SkuSnapshot).order_by(SkuSnapshot.run_id)).all()
+    latest = {(r.as_of, r.sku_id): r for r in everything}          # the newest stored row per day and SKU
+    rows = list(latest.values())
     days = sorted({r.as_of for r in rows})
     assert days == [TEST_TODAY - timedelta(days=6 - i) for i in range(7)]
     assert all(sum(1 for r in rows if r.as_of == d) == 10 for d in days)
-    today = [r for r in rows if r.as_of == TEST_TODAY]
+    today = [r for r in everything if r.as_of == TEST_TODAY and r.run_id == RUN]
+    assert len(today) == 10
     assert {r.sku_id: r.zone for r in today} == cat.ZONE_TARGET
     assert all(len(r.metrics["mc_bins"]) == 20 and "zone_raw" in r.metrics for r in today)
     earlier = [r for r in rows if r.as_of < TEST_TODAY]

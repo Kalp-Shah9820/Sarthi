@@ -136,14 +136,23 @@ class LlmGateway:
         return fallback()
 
     async def text(self, system: str, user: str, *, facts: dict, fallback: str, run_id: int | None = None,
-                   max_tokens: int = 220, task: str = "text") -> tuple[str, str]:
-        """Free text that may only use numbers from `facts`. Returns (text, 'llm' | 'template')."""
+                   max_tokens: int = 220, task: str = "text", must_contain: list[str] | None = None,
+                   max_chars: int | None = None) -> tuple[str, str]:
+        """Free text that may only use numbers from `facts`. Returns (text, 'llm' | 'template').
+
+        `must_contain`: names that have to survive in the reply (a rewrite that drops a supplier or product
+        name is rejected). `max_chars`: upper bound on length (a rewrite that balloons has added something).
+        """
         raw = await self._chat(system, user, max_tokens=max_tokens, run_id=run_id)
         if raw is None:
             self._log(run_id, "fallback", task)
             return fallback, "template"
         if not grounded(raw, facts):
             self._log(run_id, "ungrounded", task)
+            return fallback, "template"
+        lowered = raw.lower()
+        if any(name.lower() not in lowered for name in must_contain or []) or (max_chars is not None and len(raw) > max_chars):
+            self._log(run_id, "off_template", task)
             return fallback, "template"
         self._log(run_id, "ok", task)
         return raw, "llm"

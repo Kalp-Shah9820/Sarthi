@@ -282,9 +282,10 @@ def check_agent_core() -> Result:
         live = LlmGateway(get_settings())
         if await live.probe() != "llm":
             return "offline", 0.0
-        said = {"name": "Lays Classic 26g", "days_of_cover": 1.6, "lead_time_days": 12, "stockout_probability_pct": 97}
+        said = {"doc": 1.6, "lead": 12, "prob": 97, "qty": 1488, "supplier": "Reliance Metro WH", "par_k": 18.5}
+        sentence = templates.render("alert", "stockout_reorder", "EN", **said)["msg"]
         started = time.perf_counter()
-        raw = await live.raw_reply(prompts.NARRATE_ALERT, prompts.user_message(said), max_tokens=120)
+        raw = await live.raw_reply(prompts.REPHRASE, sentence, max_tokens=120)
         seconds = time.perf_counter() - started
         if raw is None:
             return "no-reply", seconds
@@ -361,6 +362,66 @@ def check_agents() -> Result:
                                   f"worst lead-time modifier {max(lead_modifier.values())}")
 
 
+def check_resolve() -> Result:
+    """mk7: negotiation, hub transfers, discount economics, and wording for every kind of proposal."""
+    from sqlmodel import select
+
+    from sarthi.agents.negotiation import negotiate
+    from sarthi.agents.overstock_resolver import (
+        LIQUIDATION_FLOOR,
+        discount_option,
+        hub_demand_shares,
+        plan_hub_moves,
+    )
+    from sarthi.agents.proposal import ALERT_TYPES
+    from sarthi.config import get_settings
+    from sarthi.db import session
+    from sarthi.llm import templates
+    from sarthi.models import Location, Sku, StockDaily
+
+    settings = get_settings()
+    problems = []
+
+    deal = negotiate(100.0, 0.02, 6.0, "Silver", 0.8, alternative_price=97.0)
+    if deal.agreed_price is None or not deal.floor <= deal.agreed_price <= deal.reserve:
+        problems.append("negotiation settled outside the two sides' limits")
+
+    missing = [t for t in ALERT_TYPES if t not in templates.ALERT]
+    if missing:
+        problems.append("no wording template for: " + ", ".join(missing))
+
+    with session() as s:
+        skus = {k.id: k.model_dump() for k in s.exec(select(Sku)).all()}
+        hubs = [x.model_dump() for x in s.exec(select(Location).where(Location.kind == "warehouse")).all()]
+        rows = s.exec(select(StockDaily).order_by(StockDaily.day)).all()
+    if not skus:
+        return Result("resolve", WARN, "no products; run `uv run sarthi seed`")
+    hub_ids = {h["id"] for h in hubs}
+    held: dict[str, dict[str, float]] = {}
+    for r in rows:
+        if r.location_id in hub_ids:
+            held.setdefault(r.sku_id, {})[r.location_id] = r.on_hand
+    moves_found = 0
+    shares = hub_demand_shares(hubs) if hubs else {}
+    for sku_id, by_hub in held.items():
+        total = sum(by_hub.values())
+        for move in plan_hub_moves(skus[sku_id], 8.0, by_hub, hubs):
+            moves_found += 1
+            if move["units"] > by_hub.get(move["from"], 0) - shares[move["from"]] * total + 1e-6:
+                problems.append(f"transfer of {sku_id} exceeds the surplus at {move['from']}")
+
+    sample = next(iter(skus.values()))
+    option = discount_option(sample, {"velocity": 5.0, "on_hand": 900, "age": 10}, settings, 0.20, LIQUIDATION_FLOOR)
+    if option and option["new_price"] < sample["cogs"] * LIQUIDATION_FLOOR:
+        problems.append("a discount went below the liquidation floor")
+    if not settings.outbox_dir.parent.exists():
+        problems.append(f"outbox folder cannot be created under {settings.outbox_dir.parent}")
+    if problems:
+        return Result("resolve", FAIL, "; ".join(problems))
+    return Result("resolve", PASS, f"negotiation settles at {deal.agreed_price} (list 100); {moves_found} hub transfers worth making; "
+                                   f"{len(ALERT_TYPES)} proposal types have wording")
+
+
 STAGE_BUDGET_S = 90
 
 
@@ -370,7 +431,7 @@ def check_performance() -> Result:
     import time
 
     from sarthi.agents import demand_intel
-    from sarthi.agents.stages import sense_and_decide
+    from sarthi.agents.stages import sense_decide_resolve as sense_and_decide
     from sarthi.analytics import data
     from sarthi.blackboard.store import delete_run_events
 
@@ -388,7 +449,8 @@ def check_performance() -> Result:
         delete_run_events(VALIDATION_RUN_ID)
     if state["errors"] or "decisions" not in state:
         return Result("performance", FAIL, "SENSE + DECIDE did not complete: " + "; ".join(state["errors"]))
-    detail = f"SENSE + DECIDE for {len(state['decisions'])} SKUs: {cold:.0f}s cold (budget {STAGE_BUDGET_S}s), {warm:.1f}s warm"
+    detail = (f"SENSE to RESOLVE for {len(state['decisions'])} SKUs, {len(state.get('proposals', []))} proposals: "
+              f"{cold:.0f}s cold (budget {STAGE_BUDGET_S}s), {warm:.1f}s warm")
     if cold > STAGE_BUDGET_S:
         return Result("performance", WARN, detail + "; check power mode (battery throttles the CPU) and other load")
     return Result("performance", PASS, detail)
@@ -397,7 +459,7 @@ def check_performance() -> Result:
 # Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core, check_agents,
+    check_analytics, check_agent_core, check_agents, check_resolve,
 ]
 
 

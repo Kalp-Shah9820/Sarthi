@@ -32,3 +32,26 @@ async def sense_and_decide(run_id: int, *, scenario: dict | None = None, strateg
     merge(await InventoryOptimizer(*args).run(state))
     merge(await ComplianceGuardian(*args).run(state))
     return state
+
+
+async def resolve(state: dict, *, settings=None, llm=None) -> dict:
+    """RESOLVE: both agents in parallel, each proposing actions for the SKUs that concern it."""
+    from sarthi.agents.distributor_selector import DistributorSelector
+    from sarthi.agents.overstock_resolver import OverstockResolver
+
+    settings = settings or get_settings()
+    args = (Blackboard(state["run_id"]), llm or get_llm(), settings, state["strategy"])
+    state.setdefault("proposals", [])
+    for update in await asyncio.gather(DistributorSelector(*args).run(state), OverstockResolver(*args).run(state)):
+        state["errors"] += update.pop("errors", [])
+        state["proposals"] += update.pop("proposals", [])
+        state.update(update)
+    return state
+
+
+async def sense_decide_resolve(run_id: int, **kw) -> dict:
+    """SENSE, DECIDE and RESOLVE. Stops after DECIDE if it produced no decisions."""
+    state = await sense_and_decide(run_id, **kw)
+    if "decisions" not in state:
+        return state
+    return await resolve(state, settings=kw.get("settings"), llm=kw.get("llm"))

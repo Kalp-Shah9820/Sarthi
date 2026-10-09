@@ -8,9 +8,14 @@ PREAMBLE = (
     "Write plainly. No greetings, no markdown, no emojis.\n"
 )
 
-NARRATE_ALERT = PREAMBLE + "In at most 2 sentences, explain to a store manager why the recommended action is needed."
-NARRATE_DEBATE = PREAMBLE + (
-    "Write exactly one sentence spoken by the agent named in the facts, stating its position on the proposal."
+# The model is never asked to explain raw facts: tested live on 2026-10-09, a 4B model kept the numbers right
+# but garbled what they meant (a rupee value became "units", a recommendation was reversed). It is given a
+# sentence that is already correct and asked only to reword it.
+REPHRASE = (
+    "Rewrite the text below so it reads naturally to a store manager. "
+    "Keep every number, every name and the meaning exactly the same. "
+    "Do not add reasons, advice, causes or any new fact. Do not swap which name does what. "
+    "Reply with the rewritten text only, in at most 2 sentences."
 )
 DRAFT_EMAIL = PREAMBLE + (
     "Write a short business email to the supplier named in the facts. First line: 'Subject: ...'. "

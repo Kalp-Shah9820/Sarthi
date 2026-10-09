@@ -35,17 +35,21 @@ def site_needs(on_hand: dict[str, float], capacity: dict[str, float], safety_sto
 
 
 def plan_transfers(surplus: dict[str, float], deficit: dict[str, float],
-                   cost: dict[tuple[str, str], float], value: dict[str, float]) -> list[dict]:
+                   cost: dict[tuple[str, str], float], value: dict[str, float],
+                   source_value: dict[str, float] | None = None) -> list[dict]:
     """Cheapest set of moves from surplus sites to deficit sites; a move happens only if it pays for itself.
 
-    `value[j]` is the per-unit benefit of filling site j's deficit (purchase cost avoided).
+    `value[j]` is the per-unit benefit of filling site j's deficit (e.g. purchase cost avoided).
+    `source_value[i]` (optional) is the per-unit benefit of removing stock from site i (e.g. carrying cost saved).
     """
+    source_value = source_value or {}
     sources = [s for s, q in surplus.items() if q > 0]
     sinks = [d for d, q in deficit.items() if q > 0]
     pairs = [(i, j) for i in sources for j in sinks if i != j]
     if not pairs:
         return []
-    c = np.array([cost[(i, j)] - value[j] for i, j in pairs])
+    gain = {(i, j): value[j] + source_value.get(i, 0.0) for i, j in pairs}
+    c = np.array([cost[(i, j)] - gain[(i, j)] for i, j in pairs])
     rows, limits = [], []
     for site in sources:
         rows.append([1.0 if i == site else 0.0 for i, _ in pairs])
@@ -61,5 +65,5 @@ def plan_transfers(surplus: dict[str, float], deficit: dict[str, float],
         units = math.floor(x + 1e-6)
         if units >= MIN_MOVE_UNITS:
             moves.append({"from": i, "to": j, "units": units, "unit_cost": round(cost[(i, j)], 2),
-                          "saving": round(units * (value[j] - cost[(i, j)]), 2)})
+                          "saving": round(units * (gain[(i, j)] - cost[(i, j)]), 2)})
     return sorted(moves, key=lambda m: -m["saving"])

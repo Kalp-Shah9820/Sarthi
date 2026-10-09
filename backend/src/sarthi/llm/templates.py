@@ -27,12 +27,14 @@ ALERT = {
                "impact": "₹{par_k}K मुनाफ़ा जोखिम में"},
     },
     "transfer": {
-        "EN": {"msg": "{from_site} holds more than it needs while {to_site} is short. Moving stock is cheaper than buying.",
+        "EN": {"msg": "{from_site} holds far more days of this product than {to_site}. "
+                      "Moving {units} units lets it sell sooner and cuts the cost of holding it.",
                "action": "Transfer {units} units: {from_site} → {to_site}",
-               "impact": "₹{saving_k}K saved vs. a new order"},
-        "HI": {"msg": "{from_site} में ज़रूरत से ज़्यादा स्टॉक है जबकि {to_site} में कमी है। स्टॉक भेजना नई ख़रीद से सस्ता है।",
+               "impact": "₹{saving_k}K holding cost saved"},
+        "HI": {"msg": "{from_site} के पास इस उत्पाद का स्टॉक {to_site} की तुलना में कहीं ज़्यादा दिनों का है। "
+                      "{units} यूनिट भेजने से यह जल्दी बिकेगा और होल्डिंग लागत घटेगी।",
                "action": "{units} यूनिट ट्रांसफ़र करें: {from_site} → {to_site}",
-               "impact": "नए ऑर्डर की तुलना में ₹{saving_k}K की बचत"},
+               "impact": "₹{saving_k}K होल्डिंग लागत की बचत"},
     },
     "markdown": {
         "EN": {"msg": "{doc} days of cover, {excess} units above what will sell in a month. Holding it is costing money.",
@@ -40,6 +42,16 @@ ALERT = {
                "impact": "₹{par_k}K carrying cost at risk"},
         "HI": {"msg": "{doc} दिन का स्टॉक है, एक महीने की बिक्री से {excess} यूनिट ज़्यादा। इसे रखना महँगा पड़ रहा है।",
                "action": "{discount}% छूट शुरू करें",
+               "impact": "₹{par_k}K होल्डिंग लागत जोखिम में"},
+    },
+    "bundle": {
+        "EN": {"msg": "{partner} buyers also take {sku} in {conf_pct}% of baskets. A bundle would move about "
+                      "{extra} extra units this month.",
+               "action": "Launch {discount}% bundle with {partner}",
+               "impact": "₹{par_k}K carrying cost at risk"},
+        "HI": {"msg": "{partner} ख़रीदने वाले {conf_pct}% बास्केट में {sku} भी लेते हैं। बंडल से इस महीने लगभग "
+                      "{extra} अतिरिक्त यूनिट बिकेंगी।",
+               "action": "{partner} के साथ {discount}% बंडल शुरू करें",
                "impact": "₹{par_k}K होल्डिंग लागत जोखिम में"},
     },
     "expiry_risk": {

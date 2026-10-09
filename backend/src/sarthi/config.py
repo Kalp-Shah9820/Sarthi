@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SARTHI_", env_file=BACKEND_ROOT / ".env", extra="ignore")
 
     db_path: str = "data/sarthi.db"
+    outbox_path: str = "outbox"            # generated purchase-order emails and summaries
     llm_base_url: str = "http://localhost:1234/v1"
     llm_model: str = "qwen/qwen3-4b-2507"
     llm_enabled: bool = True
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
     @property
     def db_file(self) -> Path:
         p = Path(self.db_path)
+        return p if p.is_absolute() else BACKEND_ROOT / p
+
+    @property
+    def outbox_dir(self) -> Path:
+        p = Path(self.outbox_path)
         return p if p.is_absolute() else BACKEND_ROOT / p
 
     @property

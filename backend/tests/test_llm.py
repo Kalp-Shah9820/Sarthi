@@ -129,6 +129,16 @@ async def test_text_rejects_an_invented_number_and_logs_it(gateway):
     assert llm_events() == [("alert", "ungrounded")]
 
 
+async def test_text_rejects_a_rewrite_that_drops_a_name_or_balloons(gateway):
+    gateway.use("The snack has a 97% stockout risk; order 1,488 units.", GOOD + " " + "It is very important. " * 10)
+    kept_name = await gateway.text("sys", "a", facts=FACTS, fallback="template", run_id=RUN, task="alert", must_contain=["Lays Classic 26g"])
+    too_long = await gateway.text("sys", "b", facts=FACTS, fallback="template", run_id=RUN, task="alert", max_chars=120)
+    assert kept_name == too_long == ("template", "template")
+    assert llm_events() == [("alert", "off_template"), ("alert", "off_template")]
+    gateway.use(GOOD)
+    assert (await gateway.text("sys", "c", facts=FACTS, fallback="template", must_contain=["lays classic 26g"], max_chars=120))[1] == "llm"
+
+
 async def test_empty_and_reasoning_only_replies_are_failures_and_never_cached(gateway):
     fake = gateway.use("", "<think>let me think about this for a long time</think>", None)
     for _ in range(3):
@@ -207,8 +217,9 @@ def test_user_message_carries_facts_and_language():
     message = prompts.user_message({"name": "नमक", "qty": 5}, "HI")
     assert message == '{"name":"नमक","qty":5}\nLanguage: Hindi'
     assert prompts.user_message({}, "TA").endswith("Language: English")
-    for prompt in (prompts.NARRATE_ALERT, prompts.NARRATE_DEBATE, prompts.DRAFT_EMAIL, prompts.EXPLAIN_SKU):
+    for prompt in (prompts.DRAFT_EMAIL, prompts.EXPLAIN_SKU):
         assert prompt.startswith(prompts.PREAMBLE)
+    assert "meaning exactly the same" in prompts.REPHRASE
 
 
 @pytest.mark.parametrize("kind", list(templates.ALERT))
@@ -275,8 +286,9 @@ async def test_live_model_extracts_json_and_writes_grounded_text(live_gateway):
                                      "Deliveries arrived early and complete.", fallback=lambda: Sentiment(positive=False))
     assert parsed.positive is True
 
-    facts = {"name": "Lays Classic 26g", "days_of_cover": 1.6, "lead_time_days": 12, "stockout_probability_pct": 97}
-    text, source = await live_gateway.text(prompts.NARRATE_ALERT, prompts.user_message(facts), facts=facts, fallback="TEMPLATE")
+    facts = {"doc": 1.6, "lead": 12, "prob": 97, "qty": 1488, "supplier": "Reliance Metro WH", "par_k": 18.5}
+    sentence = templates.render("alert", "stockout_reorder", "EN", **facts)["msg"]
+    text, source = await live_gateway.text(prompts.REPHRASE, sentence, facts=facts, fallback="TEMPLATE", max_chars=200)
     assert text != "" and source in ("llm", "template")       # either is acceptable; a wrong number never is
     if source == "llm":
         from sarthi.llm.grounding import grounded

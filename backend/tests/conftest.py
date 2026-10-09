@@ -17,6 +17,7 @@ def isolated_settings(tmp_path_factory):
     root = tmp_path_factory.mktemp("sarthi")
     env = {
         "SARTHI_DB_PATH": str(root / "test.db"),
+        "SARTHI_OUTBOX_PATH": str(root / "outbox"),
         "SARTHI_LLM_ENABLED": "false",
         "SARTHI_WEATHER_ENABLED": "false",
         "SARTHI_MC_PATHS": "800",

@@ -15,6 +15,7 @@ from sqlmodel import select
 from sarthi.agents.base import Agent
 from sarthi.analytics import montecarlo, par, policy, zones
 from sarthi.analytics.forecast import uncensor, weekday_mean_forecast
+from sarthi.analytics.topsis import ON_TIME_TOLERANCE
 from sarthi.db import session
 from sarthi.models import Delivery, Inbound, Preference, Sku, SkuSnapshot, SkuSupplier, Supplier
 from sarthi.seed.catalog import STORE_ID
@@ -125,30 +126,53 @@ class Context:
                        for sku_id, g in sales.groupby("sku_id")}
         with session() as s:
             self.skus = [k.model_dump() for k in s.exec(select(Sku).order_by(Sku.id)).all()]
-            suppliers = {x.id: {"id": x.id, "name": x.name, "capacity_limit": x.capacity_limit, "avg_tat_days": x.avg_tat_days}
-                         for x in s.exec(select(Supplier)).all()}
+            suppliers = {x.id: x.model_dump() for x in s.exec(select(Supplier).order_by(Supplier.id)).all()}
             links = s.exec(select(SkuSupplier).order_by(SkuSupplier.is_primary.desc())).all()
-            deliveries = s.exec(select(Delivery.supplier_id, Delivery.sku_id, Delivery.expected_days, Delivery.actual_days)).all()
+            deliveries = s.exec(select(Delivery.supplier_id, Delivery.sku_id, Delivery.expected_days, Delivery.actual_days,
+                                       Delivery.qty_ordered, Delivery.qty_received, Delivery.ordered_on)).all()
             self.inbounds = s.exec(select(Inbound).where(Inbound.location_id == STORE_ID)).all()
             self.safety_pct = {p.target: p.value or 0.0 for p in s.exec(
                 select(Preference).where(Preference.directive == "safety_stock_pct", Preference.active)).all()}
+        self.suppliers: dict[str, dict] = suppliers
         self.primary: dict[str, dict] = {}
+        self.unit_price: dict[tuple[str, str], float] = {}
         for link in links:                       # primaries first, so the first link seen per SKU wins
             self.primary.setdefault(link.sku_id, suppliers.get(link.supplier_id, {}))
+            self.unit_price[(link.sku_id, link.supplier_id)] = link.unit_price
         self.lead_by_pair: dict[tuple[str, str], list[float]] = {}
         self.ratio_by_supplier: dict[str, list[float]] = {}
-        for supplier_id, sku_id, expected, actual in deliveries:
+        # per supplier: deliveries, how many were on time, units ordered / received, lateness ratio by month
+        self.delivery_stats: dict[str, dict] = {
+            sid: {"n": 0, "on_time": 0, "ordered": 0, "received": 0, "by_month": {}} for sid in suppliers}
+        for supplier_id, sku_id, expected, actual, ordered, received, ordered_on in deliveries:
             self.lead_by_pair.setdefault((supplier_id, sku_id), []).append(actual)
+            stats = self.delivery_stats.setdefault(
+                supplier_id, {"n": 0, "on_time": 0, "ordered": 0, "received": 0, "by_month": {}})
+            stats["n"] += 1
+            stats["ordered"] += ordered
+            stats["received"] += received
             if expected > 0:
-                self.ratio_by_supplier.setdefault(supplier_id, []).append(actual / expected)
+                ratio = actual / expected
+                self.ratio_by_supplier.setdefault(supplier_id, []).append(ratio)
+                stats["on_time"] += ratio <= ON_TIME_TOLERANCE
+                stats["by_month"].setdefault(ordered_on.strftime("%Y-%m"), []).append(ratio)
 
     def lead_samples(self, sku: dict, supplier: dict) -> np.ndarray:
-        """Past lead times for this SKU from this supplier; else the supplier's lateness pattern on the promised lead."""
+        """Likely lead times in days for this SKU from this supplier.
+
+        Uses that pair's own deliveries when there are enough. Otherwise takes the promised lead time (the
+        SKU's, scaled by how fast this supplier is relative to the SKU's usual one) and applies the
+        supplier's record of running early or late.
+        """
         own = self.lead_by_pair.get((supplier.get("id"), sku["id"]), [])
         if len(own) >= MIN_LEAD_SAMPLES:
             return np.array(own)
+        promised = float(sku["lead_time_days"])
+        usual = self.primary.get(sku["id"], {})
+        if usual and supplier.get("id") != usual.get("id") and usual.get("avg_tat_days") and supplier.get("avg_tat_days"):
+            promised *= supplier["avg_tat_days"] / usual["avg_tat_days"]
         ratios = self.ratio_by_supplier.get(supplier.get("id"), [])
-        return np.array([sku["lead_time_days"] * r for r in ratios]) if ratios else np.array([float(sku["lead_time_days"])])
+        return np.array([promised * r for r in ratios]) if ratios else np.array([promised])
 
     def inputs(self, sku: dict, day: date, lead_modifier: dict, demand_multiplier: dict) -> SkuInputs | None:
         sku_id = sku["id"]
