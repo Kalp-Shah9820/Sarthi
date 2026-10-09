@@ -305,24 +305,91 @@ def check_agent_core() -> Result:
     return Result("agent core", PASS, f"{base}; live grounded reply in {seconds:.1f}s")
 
 
-FORECAST_BUDGET_S = 60
+def check_agents() -> Result:
+    """mk6: the SENSE and DECIDE agents produce a decision for every SKU (quick: uses the simple forecast)."""
+    from collections import Counter
+
+    from sarthi.agents.compliance_guardian import build_envelope, review
+    from sarthi.agents.inventory_optimizer import Context, decide, finalise
+    from sarthi.agents.macro_sentinel import MacroSentinel, fuse, load_feeds
+    from sarthi.agents.stages import BALANCED
+    from sarthi.analytics import data
+    from sarthi.analytics.forecast import _fallback, uncensor
+    from sarthi.blackboard.store import Blackboard
+    from sarthi.config import get_settings
+
+    settings = get_settings()
+    sales, stock = data.store_frames()
+    if sales.empty:
+        return Result("agents", WARN, "no sales history; run `uv run sarthi seed`")
+
+    sentinel = MacroSentinel(Blackboard(VALIDATION_RUN_ID), None, settings, dict(BALANCED))
+    suppliers, store, _, skus, uploaded = sentinel._master_data()
+    lead_modifier, demand_multiplier = fuse(load_feeds(settings.feeds_dir) + uploaded, suppliers, store, skus)
+
+    forecasts = {}
+    for sku_id, g in sales.sort_values("day").groupby("sku_id"):
+        held = stock[stock["sku_id"] == sku_id].set_index("day")["on_hand"].reindex(g["day"]).to_numpy(dtype=float)
+        sold = g["qty"].to_numpy(dtype=float)
+        forecasts[sku_id] = _fallback(sku_id, uncensor(sold, held), sold, 30, g["day"].iloc[-1])
+    ctx = Context(forecasts, {"sales": sales, "stock": stock, "as_of": sales["day"].max()})
+    zones_found: Counter = Counter()
+    missing = []
+    for sku in ctx.skus:
+        inp = ctx.inputs(sku, ctx.as_of, lead_modifier, demand_multiplier)
+        if inp is None:
+            missing.append(sku["id"])
+            continue
+        record = decide(inp, settings, BALANCED, 300, settings.seed)
+        zones_found[finalise(record, record["zone_raw"])["zone"]] += 1
+
+    envelope = build_envelope(settings, BALANCED)
+    over = {"kind": "purchase", "sku_id": "X", "moq": 6,
+            "payload": {"supplier_id": "S", "qty": 6, "unit_price": envelope["budget_remaining"] + 1.0, "mode": "multimodal"}}
+    problems = []
+    if missing:
+        problems.append(f"no decision for {', '.join(missing)}")
+    if not any(v.rule == "BUDGET_CAP" for v in review(over, envelope)):
+        problems.append("the budget rule did not fire on an order above the budget")
+    if not lead_modifier or min(lead_modifier.values()) < 1.0:
+        problems.append("lead-time modifiers are missing or below 1")
+    if problems:
+        return Result("agents", FAIL, "; ".join(problems))
+    summary = ", ".join(f"{n} {zone}" for zone, n in sorted(zones_found.items()))
+    return Result("agents", PASS, f"{sum(zones_found.values())} SKUs decided ({summary}); "
+                                  f"budget \u20b9{envelope['budget_remaining'] / 1000:.0f}K; "
+                                  f"worst lead-time modifier {max(lead_modifier.values())}")
+
+
+STAGE_BUDGET_S = 90
 
 
 def check_performance() -> Result:
-    """Time the slowest step (forecasting every SKU). A warning, not a failure: it depends on machine load."""
+    """Time a cold SENSE + DECIDE pass (forecasting dominates). A warning, not a failure: it depends on machine load."""
+    import asyncio
     import time
 
+    from sarthi.agents import demand_intel
+    from sarthi.agents.stages import sense_and_decide
     from sarthi.analytics import data
-    from sarthi.analytics.forecast import forecast_all
+    from sarthi.blackboard.store import delete_run_events
 
-    sales, stock = data.store_frames()
-    if sales.empty:
+    if data.store_frames()[0].empty:
         return Result("performance", WARN, "no sales history; run `uv run sarthi seed`")
-    started = time.perf_counter()
-    results = forecast_all(sales, stock)
-    seconds = time.perf_counter() - started
-    detail = f"forecast for {len(results)} SKUs took {seconds:.0f}s (budget {FORECAST_BUDGET_S}s)"
-    if seconds > FORECAST_BUDGET_S:
+    demand_intel.clear_cache()
+    try:
+        started = time.perf_counter()
+        state = asyncio.run(sense_and_decide(VALIDATION_RUN_ID, dry_run=True))
+        cold = time.perf_counter() - started
+        started = time.perf_counter()
+        asyncio.run(sense_and_decide(VALIDATION_RUN_ID, dry_run=True))
+        warm = time.perf_counter() - started
+    finally:
+        delete_run_events(VALIDATION_RUN_ID)
+    if state["errors"] or "decisions" not in state:
+        return Result("performance", FAIL, "SENSE + DECIDE did not complete: " + "; ".join(state["errors"]))
+    detail = f"SENSE + DECIDE for {len(state['decisions'])} SKUs: {cold:.0f}s cold (budget {STAGE_BUDGET_S}s), {warm:.1f}s warm"
+    if cold > STAGE_BUDGET_S:
         return Result("performance", WARN, detail + "; check power mode (battery throttles the CPU) and other load")
     return Result("performance", PASS, detail)
 
@@ -330,7 +397,7 @@ def check_performance() -> Result:
 # Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core,
+    check_analytics, check_agent_core, check_agents,
 ]
 
 

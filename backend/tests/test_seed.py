@@ -107,8 +107,7 @@ def test_open_inbound_and_stock_age_follow_the_zone(seeded_db):
             last_received[i.sku_id] = max(last_received.get(i.sku_id, i.received_on), i.received_on)
     for sku in cat.SKUS:
         assert open_by_sku[sku["id"]] == (1 if sku["zone"] == "sweet" else 0), sku["id"]
-        if sku["zone"] in ("ghost", "money"):
-            assert (TEST_TODAY - last_received[sku["id"]]).days == sku["age"], sku["id"]
+        assert (TEST_TODAY - last_received[sku["id"]]).days == sku["age"], sku["id"]
     for i in inbounds:
         if i.received_on is None:
             assert i.expected_on == TEST_TODAY + timedelta(days=1)

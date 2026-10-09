@@ -4,153 +4,153 @@
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 340,
     "Transit": 378,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU002",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 820,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU003",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 150,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU004",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 1200,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU005",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 280,
     "Transit": 737,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU006",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 95,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU007",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 640,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU008",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 180,
     "Transit": 550,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU009",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 220,
     "Transit": 390,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU010",
     "Warehouse_ID": "STORE-01",
     "Current_Stock": 75,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU002",
     "Warehouse_ID": "WH-BLR",
     "Current_Stock": 120,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU004",
     "Warehouse_ID": "WH-BLR",
     "Current_Stock": 300,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU007",
     "Warehouse_ID": "WH-BLR",
     "Current_Stock": 200,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU002",
     "Warehouse_ID": "WH-CHN",
     "Current_Stock": 90,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU004",
     "Warehouse_ID": "WH-CHN",
     "Current_Stock": 180,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU007",
     "Warehouse_ID": "WH-CHN",
     "Current_Stock": 100,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU002",
     "Warehouse_ID": "WH-DEL",
     "Current_Stock": 640,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU004",
     "Warehouse_ID": "WH-DEL",
     "Current_Stock": 500,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU007",
     "Warehouse_ID": "WH-DEL",
     "Current_Stock": 350,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU002",
     "Warehouse_ID": "WH-MUM",
     "Current_Stock": 180,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU004",
     "Warehouse_ID": "WH-MUM",
     "Current_Stock": 200,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   },
   {
     "SKU_ID": "SKU007",
     "Warehouse_ID": "WH-MUM",
     "Current_Stock": 90,
     "Transit": 0,
-    "Date": "2026-10-08"
+    "Date": "2026-10-09"
   }
 ]

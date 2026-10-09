@@ -1,5 +1,12 @@
+import sys
+
 import typer
 import uvicorn
+
+# Windows consoles default to a legacy code page that cannot print the rupee sign or Hindi text.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 app = typer.Typer(no_args_is_help=True)
 

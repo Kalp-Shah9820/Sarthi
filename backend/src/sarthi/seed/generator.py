@@ -46,6 +46,7 @@ PRIMARY_SHARE = 0.7          # share of legacy orders placed with the SKU's prim
 LEGACY_TRIGGER = 1.5         # legacy rule reorders below this many lead-times of demand
 LEGACY_ORDER = 2.0           # ... and orders this many lead-times of demand
 SHORT_SHIPMENT = 0.8         # a short shipment delivers this share of the order
+SWEET_CUSHION = 2.5          # lead-times of demand a healthy SKU still held when its latest delivery arrived
 PRICE_FACTORS = [0.92, 0.95, 0.97, 1.02, 1.00, 0.98]
 MODES, MODE_P = ["multimodal", "air", "sea"], [0.7, 0.2, 0.1]
 
@@ -125,17 +126,36 @@ def _simulate_sku(sku: dict, days: list[date], mu: np.ndarray, demand: np.ndarra
     orders = [o for o in orders if o["arrive"] < ws]
 
     # Pin window: start at the level that makes today's closing stock equal the UI's figure.
-    start = sku["stock"] + int(demand[ws:].sum())
+    primary = suppliers[cat.primary_supplier(sku["zone"])]
+
+    def on_time_delivery(arrive: int, qty: int) -> dict:
+        return {"supplier_id": primary["id"], "ordered": arrive - sku["lead"], "arrive": arrive,
+                "expected_days": float(sku["lead"]), "actual_days": float(sku["lead"]),
+                "qty": qty, "qty_received": qty, "mode": "multimodal"}
+
+    # Sweet and chaos SKUs also received their most recent delivery `age` days ago, inside the window.
+    # (Without it every such SKU would hold 13-day-old stock, which for a 15-day shelf life is nearly expired.)
+    recent_day, recent_qty = None, 0
+    if not overstock and last - sku["age"] > ws:
+        recent_day = last - sku["age"]
+        after_delivery = sku["stock"] + int(demand[recent_day:].sum())    # stock just after that delivery
+        if sku["zone"] == "sweet":   # healthy: the delivery topped up a comfortable cushion
+            cushion = min(round(mu[recent_day] * sku["lead"] * SWEET_CUSHION), int(after_delivery * 0.75))
+        else:                        # chaos: the shelf was nearly bare when it arrived
+            cushion = min(round(mu[recent_day]), int(after_delivery * 0.5))
+        recent_qty = after_delivery - cushion
+        start = cushion + int(demand[ws:recent_day].sum())
+    else:
+        start = sku["stock"] + int(demand[ws:].sum())
+
     gap = start - stock
     if gap > 0:
-        primary = suppliers[cat.primary_supplier(sku["zone"])]
-        orders.append({
-            "supplier_id": primary["id"], "ordered": ws - sku["lead"], "arrive": ws,
-            "expected_days": float(sku["lead"]), "actual_days": float(sku["lead"]),
-            "qty": gap, "qty_received": gap, "mode": "multimodal",
-        })
+        orders.append(on_time_delivery(ws, gap))
     stock = start
     for t in range(ws, n):
+        if t == recent_day:
+            stock += recent_qty
+            orders.append(on_time_delivery(t, recent_qty))
         stock -= int(demand[t])
         sold[t], on_hand[t] = int(demand[t]), stock
 

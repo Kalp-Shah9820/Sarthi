@@ -5,8 +5,13 @@ CHAOS_PROB = 0.5
 
 
 def classify(m: dict, cfg) -> str:
-    """`m` needs doc, lead_eff, stockout_prob, carry_roi; `cfg` needs overstock_cover_days. First match wins."""
-    if m["doc"] < m["lead_eff"] or m["stockout_prob"] >= CHAOS_PROB:
+    """`m` needs doc, lead_eff, stockout_prob, carry_roi; `cfg` needs overstock_cover_days. First match wins.
+
+    `doc` is days of cover from stock on hand. `cover` (optional, defaults to `doc`) also counts stock already
+    on order that will arrive within the lead time: a SKU with 4 days on the shelf and a delivery due
+    tomorrow is not short. Overstock is judged on what is physically held, so it uses `doc`.
+    """
+    if m.get("cover", m["doc"]) < m["lead_eff"] or m["stockout_prob"] >= CHAOS_PROB:
         return "chaos"
     if m["doc"] > cfg.overstock_cover_days:
         return "money" if m["carry_roi"] < 0 else "ghost"

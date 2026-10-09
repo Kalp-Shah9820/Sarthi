@@ -12,7 +12,9 @@ SKUS = [
      "age": 3, "zone": "sweet", "cogs": 200, "shelfLife": 15, "holdingCostPct": 0.02,
      "sales": [30, 35, 32, 40, 38, 42, 45, 41, 48, 44, 50, 52]},
     {"id": "SKU002", "name": "Surf Excel 1kg", "cat": "Detergent", "stock": 820, "vel": 8, "margin": 22, "lead": 7,
-     "age": 28, "zone": "ghost", "cogs": 180, "shelfLife": 365, "holdingCostPct": 0.06,
+     # holding cost is 0.06 in the frontend mock; at that value this SKU sits within 1.5 points of the
+     # ghost/money boundary and ordinary sales noise flips its zone, so it is seeded slightly lower.
+     "age": 28, "zone": "ghost", "cogs": 180, "shelfLife": 365, "holdingCostPct": 0.045,
      "sales": [50, 45, 40, 38, 35, 30, 28, 25, 22, 20, 18, 15]},
     {"id": "SKU003", "name": "Lays Classic 26g", "cat": "Snacks", "stock": 150, "vel": 95, "margin": 31, "lead": 12,
      "age": 1, "zone": "chaos", "cogs": 12, "shelfLife": 45, "holdingCostPct": 0.04,

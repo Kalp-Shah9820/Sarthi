@@ -61,12 +61,22 @@ def store_data(seeded_db):
 
 
 @pytest.fixture(scope="session")
-def forecasts(store_data):
-    """Forecasts for every seeded SKU, computed once (the slowest step in the suite) with its run time."""
+def analysis(seeded_db):
+    """Demand Intelligence's full analysis of the seeded history, computed once (the slowest step in the
+    suite) and left in the agent's cache so agent tests do not forecast again."""
     import time
 
-    from sarthi.analytics.forecast import forecast_all
+    from sarthi.agents import demand_intel
 
+    settings = get_settings()
     started = time.perf_counter()
-    results = forecast_all(*store_data)
-    return results, time.perf_counter() - started
+    result = demand_intel.analyse(settings)
+    result["seconds"] = time.perf_counter() - started
+    demand_intel._cache[demand_intel._fingerprint(settings)] = result
+    return result
+
+
+@pytest.fixture(scope="session")
+def forecasts(analysis):
+    """(forecasts per SKU, seconds the analysis took)."""
+    return analysis["forecasts"], analysis["seconds"]
