@@ -25,7 +25,7 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 | Backend milestone 7: RESOLVE and EXECUTE agents | Done. Supplier choice with price negotiation, overstock remedies (hub transfers, markdowns, bundles), and execution of approved actions as records and outbox files. |
 | Backend milestone 8: orchestration | Done. All agents run as one pipeline; proposals are debated and ruled on with a confidence score; the system learns from approvals and feedback. |
 | Backend milestone 9: HTTP API | Done. One endpoint returns every screen's data in the shapes the screens already use; others carry out the buttons' actions (approve, dismiss, order, transfer, campaign, upload, what-if) and stream agent activity live. |
-| Backend milestone 10: chat, strategy and voice | Not built yet. |
+| Backend milestone 10: chat, strategy and voice | Done. Questions are answered from live data, a typed sentence can change the strategy the agents follow, voice commands are understood against the real catalogue, and any product's situation can be explained in a sentence. |
 | Milestone 11: connecting the screens to the backend | Not built yet. |
 
 So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history and four agents can analyse it into per-product decisions, and the full agent pipeline runs end to end, producing alerts for a manager to approve. The backend now serves all of that over HTTP, but the screens do not call it yet.
@@ -100,6 +100,18 @@ curl.exe -N "http://127.0.0.1:8000/api/sandbox/debate/stream?lead=12&demand=80&s
 ```
 
 `/api/bootstrap` answers `503 warming up` until the first pipeline run has finished.
+
+Ask it questions (PowerShell):
+
+```powershell
+$ask = { param($t) Invoke-RestMethod http://127.0.0.1:8000/api/chat -Method Post -ContentType 'application/json' -Body (@{text=$t; lang='EN'} | ConvertTo-Json) }
+& $ask 'which SKUs will stock out in 7 days'
+& $ask 'why is lays in the chaos zone?'
+& $ask 'what is going on with the toothpaste?'      # needs LM Studio; without it you get the default prompt
+Invoke-RestMethod http://127.0.0.1:8000/api/skus/SKU003/explain
+```
+
+Sentences such as `prioritize cash flow for 30 days` or `reorder 50 units of lays` change data: the first switches strategy and starts a new run, the second puts a request on the Alerts list (nothing is ordered until it is approved). `uv run sarthi seed` resets everything.
 
 **Terminal 2 — frontend**
 

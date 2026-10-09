@@ -15,7 +15,8 @@ router = APIRouter(tags=["runs"])
 log = logging.getLogger("sarthi.api")
 
 STREAMED = {"context", "action", "debate", "error"}
-_current: tuple[int, asyncio.Task] | None = None      # the sync run in progress, if any
+_current: tuple[int, asyncio.Task] | None = None      # the latest run started from here, if any
+_tasks: set[asyncio.Task] = set()                     # keeps queued runs alive until they finish
 
 
 async def guarded(run_id: int, lang: str = "EN") -> None:
@@ -30,15 +31,27 @@ async def guarded(run_id: int, lang: str = "EN") -> None:
         presenters.bump()
 
 
+def launch(trigger: str, *, lang: str = "EN", queue: bool = False) -> int:
+    """Start a pipeline run in the background and return its id. Call from inside the event loop.
+
+    While a run is in progress the default is to return that run. `queue=True` always starts a new one,
+    which waits its turn: used when something the runs depend on (the strategy, a rule) has just changed.
+    """
+    global _current
+    if not queue and _current is not None and not _current[1].done():
+        return _current[0]
+    run_id = start_run(trigger)
+    task = asyncio.create_task(guarded(run_id, lang))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    _current = (run_id, task)
+    return run_id
+
+
 @router.post("/runs")
 async def create_run() -> dict:
     """Start the agent pipeline. Asking again while it is running returns the run already in progress."""
-    global _current
-    if _current is not None and not _current[1].done():
-        return {"runId": _current[0]}
-    run_id = await asyncio.to_thread(start_run, "sync")
-    _current = (run_id, asyncio.create_task(guarded(run_id)))
-    return {"runId": run_id}
+    return {"runId": launch("sync")}
 
 
 @router.get("/runs/{run_id}/stream")

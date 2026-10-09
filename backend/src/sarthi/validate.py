@@ -7,6 +7,7 @@ later milestone in an earlier one shows up here.
 
 import importlib
 import pkgutil
+import re
 import shutil
 import subprocess
 import sys
@@ -518,7 +519,8 @@ WARM_BUDGET_S = 10
 HTTP_PATHS = (
     "/api/health", "/api/bootstrap", "/api/runs", "/api/runs/{run_id}/stream", "/api/alerts/{alert_id}/approve",
     "/api/alerts/{alert_id}/dismiss", "/api/orders", "/api/transfers", "/api/campaigns", "/api/sandbox/simulate",
-    "/api/sandbox/debate/stream", "/api/datahub/upload/{upload_type}",
+    "/api/sandbox/debate/stream", "/api/datahub/upload/{upload_type}", "/api/chat", "/api/strategy", "/api/voice/intent",
+    "/api/skus/{sku_id}/explain",
 )
 BOOTSTRAP_KEYS = ("skuData", "skuMonteCarlo", "mbaRules", "cannibalization", "bullwhipData", "monthLabels", "forecastMonths",
                   "distributors", "aisles", "labels", "live")
@@ -566,9 +568,85 @@ def check_http_api() -> Result:
                                     f"what-if risk {sim.json()['risk']}%")
 
 
+NLQ_SENTENCES = (       # sentence -> intent the keyword rules must give, with no model and no database
+    ("hello", "greeting"), ("which SKUs will stock out in 7 days", "stockout_horizon"), ("prioritize cash flow", "strategy_set"),
+    ("tell me about suppliers", "suppliers"), ("market basket analysis", "basket"), ("monte carlo results", "montecarlo"),
+    ("which skus are critical", "sku_risk"), ("where is the overstock", "overstock"), ("ओवरस्टॉक कहाँ है", "overstock"),
+    ("आपूर्तिकर्ता", "suppliers"),
+)
+NLQ_LIVE = (            # sentences the rules cannot route; a loaded model should
+    ("what is going on with the toothpaste?", "explain_sku"), ("where is money sitting on shelves?", "overstock"),
+    ("who delivers fastest?", "suppliers"),
+)
+CHAT_KEYS = ("intelGreetings", "strategyUpdatedCash", "strategyUpdatedGrowth", "currentStrategyWeights", "supplierTrack",
+             "basketRules", "criticalSkuRiskRes", "sweetSpotRes", "skuZoneSummary", "inventoryStockSummary", "zoneIkigaiDesc",
+             "intelDefaultPrompt")
+
+
+def check_nlq() -> Result:
+    """mk10: sentences route to the right intent, strategy presets and wording are complete, chat answers from live data."""
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from sarthi.api.main import create_app
+    from sarthi.config import BACKEND_ROOT
+    from sarthi.llm import get_llm, templates
+    from sarthi.nlq import router, strategy
+    from sarthi.orchestrator.runner import has_data, latest_run_id
+
+    problems = []
+    for sentence, expected in NLQ_SENTENCES:
+        got = router.route_rules(sentence)
+        if got is None or got.name != expected:
+            problems.append(f"'{sentence}' routed to {got.name if got else 'the model'}, expected {expected}")
+    if set(strategy.PRESETS) != {"Balanced", "Cash Flow", "Growth"}:
+        problems.append("strategy presets are incomplete")
+    unworded = [kind for kind, entry in templates.CHAT.items() if set(entry) != {"EN", "HI"}
+                or templates.fields("chat", kind, "EN") != templates.fields("chat", kind, "HI")]
+    if unworded:
+        problems.append("chat wording differs between English and Hindi: " + ", ".join(unworded[:3]))
+    i18n = BACKEND_ROOT.parent / "src" / "data" / "i18n.js"
+    if i18n.exists():
+        source = i18n.read_text(encoding="utf-8")
+        missing = [k for k in CHAT_KEYS if f"{k}:" not in source]
+        if missing:
+            problems.append("the frontend has no translation for: " + ", ".join(missing))
+    if problems:
+        return Result("nlq", FAIL, "; ".join(problems[:3]))
+    if not has_data() or latest_run_id() is None:
+        return Result("nlq", WARN, f"{len(NLQ_SENTENCES)} sentences route correctly; no completed run to answer from yet (`uv run sarthi run`)")
+
+    client = TestClient(create_app())       # no startup hooks; only read-only questions are asked
+    for question, key in (("which skus are critical?", None), ("how many items do we track", "skuZoneSummary")):
+        r = client.post("/api/chat", json={"text": question, "lang": "EN"})
+        if r.status_code != 200 or not (r.json().get("key") or r.json().get("text")) or (key and r.json().get("key") != key):
+            return Result("nlq", FAIL, f"/api/chat '{question}' returned {r.status_code}: {r.text[:120]}")
+    voice = client.post("/api/voice/intent", json={"text": "open war room", "lang": "EN"}).json()
+    if voice.get("type") != "NAVIGATE" or voice.get("path") != "sandbox":
+        return Result("nlq", FAIL, f"voice 'open war room' gave {voice}")
+    detail = f"{len(NLQ_SENTENCES)} sentences route by rules; chat and voice answer from run #{latest_run_id()}"
+
+    async def live() -> tuple[str, int]:
+        llm = get_llm()
+        if await llm.probe() != "llm":
+            return "offline", 0
+        hits = 0
+        for sentence, expected in NLQ_LIVE:
+            intent, _ = await router.classify(sentence, llm)
+            hits += intent.name == expected
+        return "llm", hits
+
+    mode, hits = asyncio.run(live())
+    if mode != "llm":
+        return Result("nlq", PASS, detail + "; model offline, so free-form questions get the default prompt")
+    status = PASS if hits >= len(NLQ_LIVE) - 1 else WARN
+    return Result("nlq", status, detail + f"; live model routed {hits}/{len(NLQ_LIVE)} free-form questions")
+
+
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api,
+    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api, check_nlq,
 ]
 
 
@@ -579,8 +657,15 @@ def _run_tool(name: str, cmd: list[str], cwd) -> Result:
     except FileNotFoundError:
         return Result(name, FAIL, f"command not found: {cmd[0]}")
     lines = [ln for ln in (proc.stdout + proc.stderr).strip().splitlines() if ln.strip()]
-    tail = lines[-1] if lines else ""
-    return Result(name, PASS if proc.returncode == 0 else FAIL, tail[:160])
+    # The result line, not whatever was printed last: a native fault report can follow the summary.
+    summary = [ln for ln in lines if re.search(r"\b\d+ (passed|failed|error)", ln)]
+    tail = (summary or lines or [""])[-1].strip(" =")
+    faults = sum("Windows fatal exception" in ln or "Fatal Python error" in ln for ln in lines)
+    if proc.returncode != 0:
+        return Result(name, FAIL, tail[:160])
+    if faults:      # the run finished, but a native library reported a fault on the way: say so
+        return Result(name, WARN, f"{tail[:110]}; {faults} native fault report(s) during the run")
+    return Result(name, PASS, tail[:160])
 
 
 def run(full: bool = False, frontend: bool = False, perf: bool = False) -> list[Result]:

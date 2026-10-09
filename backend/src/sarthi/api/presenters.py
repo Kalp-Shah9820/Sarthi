@@ -75,6 +75,15 @@ def reset() -> None:
         _stats.clear()
 
 
+def strategy_view() -> dict:
+    """The strategy in force, as the UI context holds it."""
+    with session() as s:
+        policy = s.exec(select(StrategyPolicy).where(StrategyPolicy.active).order_by(StrategyPolicy.id.desc())).first()
+        run = s.exec(select(Run).where(Run.dry_run.is_(False)).order_by(Run.id.desc())).first()
+    changed = policy.created_at if policy else run.started_at if run else None
+    return {**active_strategy(), "lastUpdate": local_time(changed) if changed else ""}
+
+
 def tone_of(agent: str) -> str:
     return TONE.get(agent, "ghost")
 
@@ -234,7 +243,7 @@ def _build(run_id: int, lang: str) -> dict:
     open_alert = {a.sku_id for a in alerts if a.status == "open"}
     purchase = {}
     for a in alerts:                                    # highest impact first, so the first purchase per SKU wins
-        if a.payload.get("kind") == "purchase":
+        if a.payload.get("kind") == "purchase" and a.payload.get("source") != "chat":     # not a manager's own request
             purchase.setdefault(a.sku_id, a.payload)
     history: dict[str, list[dict]] = {}
     for row in prices:

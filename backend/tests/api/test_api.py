@@ -51,7 +51,9 @@ ZONES = {"sweet", "chaos", "ghost", "money"}
 ENDPOINTS = {("get", "/api/health"), ("get", "/api/bootstrap"), ("post", "/api/runs"), ("get", "/api/runs/{run_id}/stream"),
              ("post", "/api/alerts/{alert_id}/approve"), ("post", "/api/alerts/{alert_id}/dismiss"), ("post", "/api/orders"),
              ("post", "/api/transfers"), ("post", "/api/campaigns"), ("post", "/api/sandbox/simulate"),
-             ("get", "/api/sandbox/debate/stream"), ("post", "/api/datahub/upload/{upload_type}")}
+             ("get", "/api/sandbox/debate/stream"), ("post", "/api/datahub/upload/{upload_type}"),
+             ("post", "/api/chat"), ("get", "/api/strategy"), ("put", "/api/strategy"), ("post", "/api/voice/intent"),
+             ("get", "/api/skus/{sku_id}/explain")}
 
 
 @pytest.fixture(scope="module")

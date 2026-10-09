@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from sarthi.api.routers import actions, alerts, datahub, read, runs, sandbox
+from sarthi.api.routers import actions, alerts, chat, datahub, read, runs, sandbox
 from sarthi.config import get_settings
 from sarthi.db import init_db
 from sarthi.llm import get_llm
@@ -22,12 +22,27 @@ async def lifespan(app: FastAPI):
     # First start on a seeded database: run the pipeline once so the screens have something to show.
     from sarthi.orchestrator.runner import has_data, latest_run_id, run_pipeline
 
+    _close_interrupted_runs()
     app.state.startup_run = None
     if not get_settings().skip_startup_run and has_data() and latest_run_id() is None:
         app.state.startup_run = asyncio.create_task(_startup_run(run_pipeline))
     yield
     if app.state.startup_run is not None and not app.state.startup_run.done():
         app.state.startup_run.cancel()
+
+
+def _close_interrupted_runs() -> None:
+    """Runs still marked "running" were cut off when the server last stopped; record them as interrupted."""
+    from sqlmodel import select
+
+    from sarthi.db import session
+    from sarthi.models import Run, utcnow
+
+    with session() as s:
+        for run in s.exec(select(Run).where(Run.status == "running")).all():
+            run.status, run.finished_at = "interrupted", utcnow()
+            s.add(run)
+        s.commit()
 
 
 async def _startup_run(run_pipeline) -> None:
@@ -49,7 +64,7 @@ def create_app() -> FastAPI:
         llm = getattr(app.state, "llm", None)
         return {"status": "ok", "llm": await llm.probe() if llm else "unknown"}
 
-    for module in (read, runs, alerts, actions, sandbox, datahub):
+    for module in (read, runs, alerts, actions, sandbox, datahub, chat):
         app.include_router(module.router, prefix="/api")
 
     @app.exception_handler(Exception)
