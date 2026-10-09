@@ -12,6 +12,7 @@ import numpy as np
 from sqlalchemy import delete
 
 from sarthi.agents.base import Agent
+from sarthi.agents.debate import days_text
 from sarthi.agents.inventory_optimizer import Context, SkuInputs
 from sarthi.agents.negotiation import negotiate
 from sarthi.agents.proposal import Proposal
@@ -174,7 +175,8 @@ class DistributorSelector(Agent):
                 "doc": d["doc"], "lead": d["lead_mean"], "lead_old": d["lead_mean"], "lead_new": chosen["lead_days"],
                 "prob": d["risk_shortage"], "qty": order["qty"], "par_k": round(d["par_shortage"] / 1000, 1),
                 "rescued_k": round(rescued / 1000, 1), "score": round(chosen["score"]),
-                "mode": option["mode"], "eta_days": option["eta_days"], "co2_kg": option["co2_kg"],
+                "mode": option["mode"], "eta_days": option["eta_days"], "eta": days_text(option["eta_days"]),
+                "co2_kg": option["co2_kg"],
                 "freight": option["freight_cost"], "list_price": deal.list_price, "agreed_price": deal.agreed_price,
                 "unit_price": deal.unit_price, "offer": deal.unit_price,   # the email asks for the price we expect to pay
                 "saving": round((deal.list_price - deal.unit_price) * order["qty"], 2), "rounds": len(deal.rounds),
@@ -191,7 +193,8 @@ class DistributorSelector(Agent):
                 facts=facts,
                 extra={"moq": sku["moq"], "shelf_cap": order["shelf_cap"], "modes": order["modes"],
                        "mode_risk": {o["mode"]: o["stockout_prob"] for o in order["modes"]},
-                       "urgency": round(urgency, 2), "zone": d["zone"], "supplier_email": supplier["email"]},
+                       "urgency": round(urgency, 2), "zone": d["zone"], "supplier_email": supplier["email"],
+                       "par_now": round(d["par_shortage"], 2)},
             ))
         return proposals, {"global": global_rows(ctx, mode), "per_sku": per_sku}
 

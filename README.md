@@ -21,10 +21,13 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 | Backend milestone 3: file ingestion | Done. The 8 Data Hub file types can be read, checked and stored (from code; the upload button is connected in milestone 9). |
 | Backend milestone 4: analytics | Done. Forecasting, stockout simulation, zones, Profit-at-Risk, supplier scoring, basket analysis and the transfer and budget optimisers, as tested calculation code. |
 | Backend milestone 5: agent foundations | Done. Shared event log for agents, the local-model connection with safe fallbacks, and the check that stops the model inventing numbers. |
-| Backend milestones 6–10: agents, API | Not built yet. |
+| Backend milestone 6: SENSE and DECIDE agents | Done. Four agents turn the history and outside signals into a decision per product: risk, zone, value at risk, how much to order, and the rules any action must follow. |
+| Backend milestone 7: RESOLVE and EXECUTE agents | Done. Supplier choice with price negotiation, overstock remedies (hub transfers, markdowns, bundles), and execution of approved actions as records and outbox files. |
+| Backend milestone 8: orchestration | Done. All agents run as one pipeline; proposals are debated and ruled on with a confidence score; the system learns from approvals and feedback. |
+| Backend milestones 9–10: API, chat and voice | Not built yet. |
 | Milestone 11: connecting the screens to the backend | Not built yet. |
 
-So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history and can analyse it, but no agent runs the analysis yet and nothing is served to the screens.
+So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history and four agents can analyse it into per-product decisions, and the full agent pipeline runs end to end, producing alerts for a manager to approve. The screens are not connected to it yet.
 
 ## What you need installed
 
@@ -79,7 +82,7 @@ cd "C:\Users\Kalp Shah\Desktop\Sarthi\backend"
 uv run sarthi serve
 ```
 
-It listens on `http://127.0.0.1:8000`. Check it with:
+It listens on `http://127.0.0.1:8000`. The first time it starts on a seeded database it runs the agent pipeline once in the background (about a minute). Check it with:
 
 ```powershell
 curl.exe http://127.0.0.1:8000/api/health
@@ -140,6 +143,8 @@ Individual checks:
 | `uv run sarthi validate` | Quick checks only, a few seconds |
 | `uv run sarthi validate --perf` | Also times the forecasting step against its 60-second budget |
 | `uv run sarthi seed` | Resets the database to the demo state |
+| `uv run sarthi run` | Runs the whole agent pipeline once and prints a summary |
+| `uv run sarthi run --dry --lead-mult 2` | A what-if (here: lead times doubled); stores no alerts and executes nothing |
 | `uv run sarthi export-samples` | Writes the 8 example upload files into `backend/samples` |
 | `uv run sarthi version` | Prints the backend version |
 
@@ -154,7 +159,7 @@ Individual checks:
 | `validate` shows `WARN` for `ingest` | The sample files are missing. Run `uv run sarthi export-samples`. |
 | Tests or forecasting are several times slower than usual | The laptop is on battery, which throttles the processor. Plug it in. |
 | VS Code underlines `import sarthi...` as unresolved | Select the interpreter `backend\.venv\Scripts\python.exe` (Ctrl+Shift+P, "Python: Select Interpreter"). The code runs fine either way. |
-| Port 8000 already in use | Another backend is running. Stop it, or start with `uv run sarthi serve --port 8001`. |
+| Port 8000 already in use | Another backend is running, possibly one left behind when a terminal was closed without pressing Ctrl+C. Find it with `netstat -ano \| findstr :8000` and end that process in Task Manager, or start with `uv run sarthi serve --port 8001`. |
 | Screens show the same numbers regardless of the backend | Expected for now: the screens are connected to the backend in milestone 11. |
 
 ## How the finished system will work

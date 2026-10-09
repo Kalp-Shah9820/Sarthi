@@ -118,3 +118,26 @@ Returns `{"txid": id, "kind": kind}`. Every execution writes `bb.act("executionE
 ## Done when
 
 Tests pass and `backend/outbox/` contains a readable `.eml` after the purchase test.
+
+## Implementation notes (as built, 2026-10-09)
+
+Verified by `tests/agents/test_resolve.py` (24 tests) and `tests/agents/test_execute.py` (9 tests). Deviations from the text above:
+
+- **Model wording is a rephrase, not an explanation.** With the live model, "explain these facts" produced sentences whose numbers passed the grounding check but whose meaning was wrong (a rupee value called "units", a cap-the-order finding described as "increase stock"). Alerts now send the already-correct template sentence with the `REPHRASE` prompt. Two extra guards in `gateway.text`: `must_contain` (every name in the template must survive) and `max_chars`. Outcome `off_template` is logged when they fail. mk8's debate lines must use the same approach (`NARRATE_ALERT` / `NARRATE_DEBATE` no longer exist).
+- **Proposal** gained `extra` (review context: `moq`, `shelf_cap`, `modes`, `mode_risk`, `urgency`, `zone`, `remedy`, `dest_free_capacity`, `label`) and `net`. `as_dict()` lifts `extra` to the top level so `compliance_guardian.review` can read it. Ids are `kind:alert_type:sku_id`. Alert type `bundle` was added, with templates.
+- **The order quantity is recomputed for the chosen supplier's lead time.** A faster supplier needs a smaller order (Lays: 984 units from Reliance vs. 1,788 from the usual supplier).
+- **Shipping mode shifts the supplier's lead time** relative to the default mode (multimodal): air is 2 days sooner, sea 4 days later, never below 1 day.
+- **`par_rescued` for a purchase** = shortage value if nothing changes (waiting for the usual supplier) minus shortage value until this order lands.
+- **`cost` for a purchase is the order value plus freight**, so `net` is not a profit figure for purchases; the Arbiter (mk8) weighs cost with `w_cash`. `net` is meaningful for transfers and campaigns.
+- **Hub transfers even out days of cover.** Per-hub sales do not exist yet, so each hub's demand is assumed proportional to its capacity (`hub_demand_shares`). The value of a move is the carrying cost saved because the unit sells sooner. The plan's safety-stock rule found no deficits at all, because every hub is overstocked on the ghost/money SKUs. `plan_transfers` gained `source_value`. The store is not part of the hub network.
+- **Markdown must clear cost x 1.02; a flash sale may go down to cost x 0.75** when holding or expiry would cost more. Tata Salt (4 % margin) therefore gets no markdown, and with a transfer not worth its freight it gets **no proposal at all**: there is no profitable action, which is the honest answer.
+- **Remedy choice** only considers remedies with positive net value; Thompson sampling reweights between those. Learning never promotes a loss-making remedy.
+- **Campaign cards** always number three. The bundle card promotes an in-stock companion of a product that is running out. Cards may show a negative `net` (e.g. the markdown for Surf Excel loses more margin than it saves).
+- **Cannibalization value** = uplift x velocity x review period x cost x the falling SKU's stockout probability.
+- **Negotiation**: the buyer's reserve is capped by the next-best supplier's price; the opening email quotes the price we expect to pay. On the seeded data deals close in round 4 at 3-4 % below list.
+- **Execution ids**: `PO-<base36 time>`, `TRF-<5 chars>`, `CMP-<id>`, `TASK-<5 chars>`. Dates use the data's last day (`data_today()`), not the wall clock. Transfers are clamped to what the source holds. One campaign row per type.
+- **Settings**: `outbox_path` (`SARTHI_OUTBOX_PATH`, default `backend/outbox`).
+- **`learning/bandit.py`** is implemented here in full (`get_arm`, `mean`, `sample`, `lower_bound`, `record`); mk8 only needs to call it.
+- **`agents/stages.py`** gained `resolve()` and `sense_decide_resolve()`.
+- **Supplier scores are on a strict absolute scale**: seeded suppliers score 73 / 51 / 37 overall (the mock shows 94 / 88 / 79). Displayed tiers come from the supplier record, not from the score.
+- **Measured**: SENSE to RESOLVE 25 s cold, 0.4 s warm; with the live model and nothing cached, a run that also raises 7 alerts took 48 s.

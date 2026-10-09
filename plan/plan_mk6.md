@@ -130,3 +130,27 @@ Returns: `{"envelope": envelope}`.
 ## Done when
 
 The golden-zone test passes and a full SENSE+DECIDE pass over the seeded data takes under 90 seconds cold and under 5 seconds with the forecast cache warm.
+
+## Implementation notes (as built, 2026-10-09)
+
+Verified by `tests/agents/test_sense_decide.py` (30 tests). Deviations from the text above:
+
+- **Golden zones pass** on the test seed and on the real database's seed. Across six seeds, five classify all 10 SKUs correctly with a steady 7-day history; the sixth is an extreme draw where Surf Excel sold 35 % below normal and is (reasonably) classed as a money pit.
+- **Seed changes made to get there** (the classifier's rules were not tuned):
+  - Surf Excel's holding cost is seeded at 4.5 %/month instead of the mock's 6 %. At 6 % it sits within 1.5 points of the ghost/money boundary and ordinary sales noise flipped it.
+  - Sweet and chaos SKUs now receive their latest delivery `age` days ago inside the pin window (previously all were 13 days old, which made 15-day-shelf-life butter look nearly expired and showed as value at risk).
+- **`cover` vs. `doc`.** Days of cover for the shortage test counts stock already on order that arrives within the lead time (`cover`); the overstock test uses stock on hand (`doc`). Without this a healthy SKU with four days on the shelf and a delivery due tomorrow was classed as chaos. `zones.classify` reads `cover` when present.
+- **Disruption delays stock already on its way**: open inbound arrives after `round(days x lead modifier)` days. This is what moves healthy SKUs into chaos under a severe what-if.
+- **The scenario is applied once**, by Macro Sentinel, on top of the fused signal modifiers (signals capped at 2.0, scenario clamped to 0.5-3.0). Inventory Optimizer does not multiply it in again.
+- **Dry runs leave no trace**: no risk signals, no snapshots. They also skip hysteresis so a what-if shows the unsmoothed effect.
+- **"Today" is the last day in the data** (`as_of`), not the wall clock, so stale demo data still analyses consistently.
+- **History back-fill** reuses any stored day and only computes missing ones; earlier days are computed with what was known then (weekday-mean forecast, 500 paths) and stored without the histogram.
+- **Snapshots store `zone_raw`** next to the final zone, as the hysteresis rule needs yesterday's unsmoothed value.
+- **Risk signals are replaced each run** (weather, feed, news), not accumulated; uploaded signals are kept and get their `skus_at_risk` refreshed.
+- **Weather**: one failure stops further city lookups for that run (one error event, not five). Heatwave affects Snacks demand only (one multiplier per signal). Dynamic weather signals carry English `msg` and no `msg_key`.
+- **Lead-time samples** fall back to the supplier's lateness pattern applied to `Sku.lead_time_days` when a SKU has fewer than 5 deliveries from its primary supplier.
+- **`review(proposal, envelope, committed_value)`** reads optional context from the proposal dict (`moq`, `shelf_cap`, `alternatives`, `mode_risk`, `air_orders`, `total_orders`, `dest_free_capacity`); mk7 supplies it. Extra rules `AUTO_LIMIT` and `CAPACITY` are named explicitly. A compliant proposal returns an empty list.
+- **`agents/stages.py::sense_and_decide()`** runs the four agents in order (SENSE in parallel). mk8's graph replaces it as the entry point; tests and the validator use it meanwhile.
+- **Demand Intel cache** is keyed by (database file, last sale id, last sale day, external forecast timestamp). Measured on mains power: 26 s cold, 0.2 s warm.
+- **Console encoding**: the CLI switches stdout to UTF-8 so the rupee sign and Hindi print on Windows.
+- **Validator**: `agents` check added (quick, uses the simple forecast); `--perf` now times a cold and warm SENSE + DECIDE pass against the 90 s budget.

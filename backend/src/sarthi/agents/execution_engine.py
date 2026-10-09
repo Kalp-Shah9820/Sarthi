@@ -207,6 +207,7 @@ class ExecutionEngine(Agent):
                 names = [v for v in needed.values() if isinstance(v, str) and v and v in wording["msg"]]
                 msg, _ = await self.llm.text(prompts.REPHRASE, wording["msg"], facts=needed, fallback=wording["msg"],
                                              run_id=self.bb.run_id, task="alert", max_tokens=120, must_contain=names,
+                                             source=wording["msg"],
                                              max_chars=round(len(wording["msg"]) * 1.6) + 20)
             decision = decisions.get(p["sku_id"], {})
             with session() as s:

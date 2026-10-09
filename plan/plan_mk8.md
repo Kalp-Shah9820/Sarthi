@@ -184,3 +184,25 @@ Manual: `uv run sarthi run` prints `run N done`; with LM Studio open, `Event` ro
 ## Done when
 
 Pipeline tests pass; a warm full run takes under 10 seconds offline and under 60 seconds with the local model.
+
+## Implementation notes (as built, 2026-10-09)
+
+Verified by `tests/test_pipeline.py` (24 tests) plus a live-model run on the real database. Deviations from the text above:
+
+- **Debate rewording by the model is off by default** (`SARTHI_LLM_REWORD_DEBATE=false`). In the first live run two reworded lines changed which product an action applied to ("cap its next order" became "cap the next order for <the other product>"). The template sentences are used as they are. Alert explanations are still reworded, under a stricter guard.
+- **Stricter rewrite guard**: `gateway.text(..., source=...)` rejects a rewrite unless every name appears exactly as often as in the sentence being reworded. Templates were also made unambiguous (no pronouns for which product an action applies to).
+- **Model-call budget is 20 per run** (was 12): 3 emails + 7 alert explanations (+ 8 debate lines if rewording is switched on).
+- **A run with any agent error is recorded as `failed`**, and `latest_run_id()` only returns `done` runs, so a broken run never replaces the last good result.
+- **`start_run()` and `execute_run()`** are split out of `run_pipeline()` so a caller (mk9's SSE endpoint) can subscribe to a run's events before it starts. `run_summary(run_id)` returns what a run in this process produced.
+- **State** also declares `history`, `as_of`, `alerts`, `executed`. The phase events are written once per phase (`sense`, `decide`, `resolve`, `execute`).
+- **Critics.** `forecaster`: `BORROWED_DEMAND` (must revise: the order is cut by the share of demand borrowed from a sold-out substitute), `FORECAST_UNCERTAIN` (14-day error above 35 %), `PHANTOM_STOCK`. `riskAgent`: `FASTER_MODE` when a faster mode cuts stockout risk by 5 points or more, otherwise `RESIDUAL_RISK`. `cfoAgent` / `esgGuardian`: the Compliance Guardian's verdicts.
+- **Compliance changes.** The air-share limit applies only from the fifth order (a share over two orders means nothing). "Air is not needed" is its own rule, `AIR_UNNEEDED`, and when the shipping options are costed it fires only if the slower mode is no worse in total (freight + priced carbon + stockout exposure).
+- **Revisions**: quantity, shipping mode and transfer units are revised in place. A different supplier cannot be patched in here, so a proposal blocked on its supplier is rejected.
+- **Ruling.** Purchases compete for the budget on `par_rescued - w_cash x cost - carbon_price x co2`. Transfers and campaigns need positive net value (`NO_NET_BENEFIT` otherwise). Audits are always approved.
+- **Confidence stability for a purchase** = share of 20 plausible forecast errors under which an order within 25 % of the proposed size is still needed (stricter than "an order is still needed", which was always 100 % for at-risk SKUs and gave no spread). Seeded data gives 47-98 % across the seven alerts.
+- **Data freshness is measured**: the stock record counts as fresh only if the data's last day is within 2 days of today.
+- **Counterfactual**: `on_hand` is exact (the reorder point less stock on order). `lead_days` is reported only if some lead time on the grid removes the need to order; on the seeded data none does.
+- **Learning.** `learning/memory.py`: `rule_based()` handles common feedback phrasings without the model; `to_preference()` attaches a rule to a real supplier or SKU (defaulting to the alert's SKU), or keeps it as a note; `learn_from_decision()` is the entry point for mk9's approve / dismiss endpoints. `safety_stock_pct` is honoured by the Inventory Optimizer. `min_cover_days` is stored and reaches the envelope but nothing enforces it yet.
+- **Earned autonomy** needs about 6 straight approvals of one action type in one zone; two dismissals lose it again.
+- **Server startup** runs the pipeline once when there is data but no completed run (`SARTHI_SKIP_STARTUP_RUN=true` turns this off; tests set it).
+- **Measured** (mains power): full pipeline 26 s cold and 1.6 s warm inside one process; a first run with the live model 54 s including start-up. Each `sarthi run` is a new process, so it refits the forecasts (about 30 s); inside the server repeat runs are warm.

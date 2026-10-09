@@ -247,3 +247,5 @@ Deviations from the text above, verified by `tests/test_blackboard.py`, `tests/t
 - **Timestamps:** `local_time()` treats a stored time without timezone as UTC.
 - **Forecast speed check moved out of pytest.** `forecast_all` took 22-32 s on mains power and 74-230 s on battery (the CPU is throttled). The unit test no longer asserts a wall-clock limit; `uv run sarthi validate --perf` reports the time against the 60 s budget as a warning.
 - **Live-model test** runs only with `SARTHI_TEST_LLM=1`; otherwise it is skipped (1 skipped in the normal suite).
+
+- **Update 2026-10-09 (mk7):** `NARRATE_ALERT` and `NARRATE_DEBATE` were replaced by `REPHRASE`. The model rewords a correct template sentence instead of explaining raw facts; see the mk7 implementation notes for why. `gateway.text` gained `must_contain` and `max_chars`.

@@ -139,6 +139,19 @@ async def test_text_rejects_a_rewrite_that_drops_a_name_or_balloons(gateway):
     assert (await gateway.text("sys", "c", facts=FACTS, fallback="template", must_contain=["lays classic 26g"], max_chars=120))[1] == "llm"
 
 
+async def test_text_rejects_a_rewrite_that_changes_how_often_a_name_appears(gateway):
+    """Seen live: 'cap its next order' reworded so that the action applied to the other product."""
+    facts = {"rising": "Haldirams Namkeen 400g", "falling": "Lays Classic 26g", "uplift_pct": 136}
+    source = "Haldirams Namkeen 400g sold 136% above normal only while Lays Classic 26g was out of stock; cap the next order of Haldirams Namkeen 400g."
+    swapped = "Haldirams Namkeen 400g sold 136% above normal while Lays Classic 26g was out of stock; cap the next order for Lays Classic 26g."
+    faithful = "While Lays Classic 26g was out of stock, Haldirams Namkeen 400g sold 136% above normal, so the next order of Haldirams Namkeen 400g should be capped."
+    names = [facts["rising"], facts["falling"]]
+    gateway.use(swapped, faithful)
+    assert await gateway.text("sys", "a", facts=facts, fallback=source, must_contain=names, source=source, run_id=RUN, task="debate") == (source, "template")
+    assert await gateway.text("sys", "b", facts=facts, fallback=source, must_contain=names, source=source) == (faithful, "llm")
+    assert llm_events() == [("debate", "off_template")]
+
+
 async def test_empty_and_reasoning_only_replies_are_failures_and_never_cached(gateway):
     fake = gateway.use("", "<think>let me think about this for a long time</think>", None)
     for _ in range(3):

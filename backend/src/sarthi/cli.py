@@ -35,6 +35,29 @@ def seed():
     typer.echo("seeded: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
 
 
+@app.command()
+def run(lead_mult: float = 1.0, demand_mult: float = 1.0, dry: bool = False, lang: str = "EN"):
+    """Run the agent pipeline once. --dry makes it a what-if that stores no alerts and executes nothing."""
+    import asyncio
+
+    from sarthi.db import init_db
+    from sarthi.orchestrator.runner import run_pipeline, run_summary
+
+    init_db()
+    scenario = {"lead_mult": lead_mult, "demand_mult": demand_mult}
+    run_id = asyncio.run(run_pipeline("cli", scenario=scenario, dry_run=dry, lang=lang.upper()))
+    summary = run_summary(run_id)
+    zones: dict[str, int] = {}
+    for d in summary["decisions"].values():
+        zones[d["zone"]] = zones.get(d["zone"], 0) + 1
+    typer.echo(f"run {run_id} {summary['status']}: {len(summary['decisions'])} SKUs "
+               f"({', '.join(f'{n} {z}' for z, n in sorted(zones.items()))}); {summary['proposals']} proposals, "
+               f"{summary['approved']} approved, {len(summary['alerts'])} alerts, {len(summary['executed'])} executed")
+    for error in summary["errors"]:
+        typer.echo(f"  error: {error}")
+    raise typer.Exit(0 if summary["status"] == "done" else 1)
+
+
 @app.command("export-samples")
 def export_samples_cmd():
     """Write one example upload file per Data Hub card into backend/samples."""

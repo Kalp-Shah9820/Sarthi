@@ -137,11 +137,14 @@ class LlmGateway:
 
     async def text(self, system: str, user: str, *, facts: dict, fallback: str, run_id: int | None = None,
                    max_tokens: int = 220, task: str = "text", must_contain: list[str] | None = None,
-                   max_chars: int | None = None) -> tuple[str, str]:
+                   max_chars: int | None = None, source: str | None = None) -> tuple[str, str]:
         """Free text that may only use numbers from `facts`. Returns (text, 'llm' | 'template').
 
         `must_contain`: names that have to survive in the reply (a rewrite that drops a supplier or product
         name is rejected). `max_chars`: upper bound on length (a rewrite that balloons has added something).
+        `source`: the sentence being reworded; each name must then appear exactly as often as it does there.
+        A live run showed why: "cap its next order" came back as "cap the next order for <the other product>",
+        with every number and name present but one name mentioned twice.
         """
         raw = await self._chat(system, user, max_tokens=max_tokens, run_id=run_id)
         if raw is None:
@@ -151,7 +154,10 @@ class LlmGateway:
             self._log(run_id, "ungrounded", task)
             return fallback, "template"
         lowered = raw.lower()
-        if any(name.lower() not in lowered for name in must_contain or []) or (max_chars is not None and len(raw) > max_chars):
+        miscounted = source is not None and any(
+            lowered.count(name.lower()) != source.lower().count(name.lower()) for name in must_contain or [])
+        if (miscounted or any(name.lower() not in lowered for name in must_contain or [])
+                or (max_chars is not None and len(raw) > max_chars)):
             self._log(run_id, "off_template", task)
             return fallback, "template"
         self._log(run_id, "ok", task)

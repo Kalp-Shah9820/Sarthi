@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,8 +14,15 @@ async def lifespan(app: FastAPI):
     init_db()
     app.state.llm = get_llm()
     await app.state.llm.probe()
-    # mk8 adds the first pipeline run
+    # First start on a seeded database: run the pipeline once so the screens have something to show.
+    from sarthi.orchestrator.runner import has_data, latest_run_id, run_pipeline
+
+    app.state.startup_run = None
+    if not get_settings().skip_startup_run and has_data() and latest_run_id() is None:
+        app.state.startup_run = asyncio.create_task(run_pipeline("startup"))
     yield
+    if app.state.startup_run is not None and not app.state.startup_run.done():
+        app.state.startup_run.cancel()
 
 
 def create_app() -> FastAPI:

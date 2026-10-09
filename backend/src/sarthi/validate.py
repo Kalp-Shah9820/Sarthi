@@ -422,44 +422,102 @@ def check_resolve() -> Result:
                                    f"{len(ALERT_TYPES)} proposal types have wording")
 
 
+def check_orchestration() -> Result:
+    """mk8: the agent graph builds, the debate has wording for every message, and the last real run is healthy."""
+    from sqlmodel import func, select
+
+    from sarthi.agents import debate
+    from sarthi.agents.proposal import ALERT_TYPES
+    from sarthi.blackboard.store import Blackboard
+    from sarthi.config import get_settings
+    from sarthi.db import session
+    from sarthi.models import Alert, Run
+    from sarthi.orchestrator.graph import AGENT_CLASSES, build_agents, build_graph
+    from sarthi.orchestrator.state import PHASE_OF
+
+    problems = []
+    agents = build_agents(Blackboard(VALIDATION_RUN_ID), None, get_settings(), {"mode": "Balanced"})
+    nodes = set(build_graph(agents).get_graph().nodes)
+    if not set(AGENT_CLASSES) <= nodes or set(AGENT_CLASSES) != set(PHASE_OF):
+        problems.append("the graph is missing an agent")
+    if set(debate.LINES["EN"]) != set(debate.LINES["HI"]):
+        problems.append("debate wording differs between English and Hindi")
+    unworded = [t for t in ALERT_TYPES if not debate.has_line(f"propose:{t}")]
+    if unworded:
+        problems.append("no debate wording for: " + ", ".join(unworded))
+    if problems:
+        return Result("orchestration", FAIL, "; ".join(problems))
+
+    with session() as s:
+        last = s.exec(select(Run).where(Run.dry_run.is_(False)).order_by(Run.id.desc())).first()
+        if last is None:
+            return Result("orchestration", WARN, f"graph of {len(AGENT_CLASSES)} agents builds; no pipeline run yet (`uv run sarthi run`)")
+        alerts = s.exec(select(func.count()).select_from(Alert).where(Alert.run_id == last.id)).one()
+        open_alerts = s.exec(select(func.count()).select_from(Alert).where(Alert.run_id == last.id, Alert.status == "open")).one()
+    errors = len(Blackboard(last.id).events(kind="error"))
+    detail = f"graph of {len(AGENT_CLASSES)} agents builds; last run #{last.id} {last.status}: {alerts} alerts ({open_alerts} open), {errors} agent errors"
+    if last.status == "failed":
+        return Result("orchestration", FAIL, detail)
+    if last.status == "running":
+        return Result("orchestration", WARN, detail + " (still running, or the server was stopped mid-run)")
+    return Result("orchestration", PASS, detail)
+
+
 STAGE_BUDGET_S = 90
 
 
 def check_performance() -> Result:
-    """Time a cold SENSE + DECIDE pass (forecasting dominates). A warning, not a failure: it depends on machine load."""
+    """Time a cold and a warm what-if run of the whole pipeline. A warning, not a failure: it depends on machine load."""
     import asyncio
     import time
 
+    from sqlalchemy import delete
+
     from sarthi.agents import demand_intel
-    from sarthi.agents.stages import sense_decide_resolve as sense_and_decide
     from sarthi.analytics import data
     from sarthi.blackboard.store import delete_run_events
+    from sarthi.db import session
+    from sarthi.models import Run
+    from sarthi.orchestrator.runner import run_pipeline, run_summary
 
     if data.store_frames()[0].empty:
         return Result("performance", WARN, "no sales history; run `uv run sarthi seed`")
     demand_intel.clear_cache()
-    try:
+    made = []
+
+    async def both() -> tuple[float, float]:
         started = time.perf_counter()
-        state = asyncio.run(sense_and_decide(VALIDATION_RUN_ID, dry_run=True))
+        made.append(await run_pipeline("validate-cold", dry_run=True))
         cold = time.perf_counter() - started
         started = time.perf_counter()
-        asyncio.run(sense_and_decide(VALIDATION_RUN_ID, dry_run=True))
-        warm = time.perf_counter() - started
-    finally:
-        delete_run_events(VALIDATION_RUN_ID)
-    if state["errors"] or "decisions" not in state:
-        return Result("performance", FAIL, "SENSE + DECIDE did not complete: " + "; ".join(state["errors"]))
-    detail = (f"SENSE to RESOLVE for {len(state['decisions'])} SKUs, {len(state.get('proposals', []))} proposals: "
-              f"{cold:.0f}s cold (budget {STAGE_BUDGET_S}s), {warm:.1f}s warm")
-    if cold > STAGE_BUDGET_S:
+        made.append(await run_pipeline("validate-warm", dry_run=True))
+        return cold, time.perf_counter() - started
+
+    try:
+        cold, warm = asyncio.run(both())
+        summary = run_summary(made[0])
+    finally:                                   # what-if runs made for timing leave no trace
+        for run_id in made:
+            delete_run_events(run_id)
+        with session() as s:
+            s.connection().execute(delete(Run).where(Run.id.in_(made)))
+            s.commit()
+    if summary["status"] != "done":
+        return Result("performance", FAIL, "the pipeline did not complete: " + "; ".join(summary["errors"]))
+    detail = (f"full pipeline, {len(summary['decisions'])} SKUs, {summary['proposals']} proposals: "
+              f"{cold:.0f}s cold (budget {STAGE_BUDGET_S}s), {warm:.1f}s warm (budget {WARM_BUDGET_S}s)")
+    if cold > STAGE_BUDGET_S or warm > WARM_BUDGET_S:
         return Result("performance", WARN, detail + "; check power mode (battery throttles the CPU) and other load")
     return Result("performance", PASS, detail)
+
+
+WARM_BUDGET_S = 10
 
 
 # Each milestone appends its check here, so a later change that breaks an earlier milestone is caught.
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core, check_agents, check_resolve,
+    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration,
 ]
 
 

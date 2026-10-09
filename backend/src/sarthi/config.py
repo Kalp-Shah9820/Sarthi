@@ -16,8 +16,10 @@ class Settings(BaseSettings):
     llm_enabled: bool = True
     llm_timeout_s: float = 45.0
     llm_reasoning_headroom: int = 0
-    llm_max_calls_per_run: int = 12      # uncached model calls one pipeline run may make
+    llm_max_calls_per_run: int = 20      # uncached model calls one pipeline run may make (emails + debate + alerts)
+    llm_reword_debate: bool = False      # let the model reword agent-debate lines (off: template sentences are used)
     weather_enabled: bool = True
+    skip_startup_run: bool = False       # the server normally runs the pipeline once when it starts with data but no run
     mc_paths: int = 2000
     seed: int = 20261005
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

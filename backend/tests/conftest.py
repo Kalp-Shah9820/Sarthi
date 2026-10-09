@@ -21,6 +21,7 @@ def isolated_settings(tmp_path_factory):
         "SARTHI_LLM_ENABLED": "false",
         "SARTHI_WEATHER_ENABLED": "false",
         "SARTHI_MC_PATHS": "800",
+        "SARTHI_SKIP_STARTUP_RUN": "true",
     }
     previous = {k: os.environ.get(k) for k in env}
     os.environ.update(env)

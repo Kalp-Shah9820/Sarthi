@@ -401,10 +401,18 @@ def test_air_freight_needs_a_reason():
     needed = purchase(mode="air", mode_risk={"air": 0.05, "multimodal": 0.60})
     unneeded = purchase(mode="air", mode_risk={"air": 0.05, "multimodal": 0.08})
     over_share = purchase(mode="air", mode_risk={"air": 0.05, "multimodal": 0.60}, air_orders=2, total_orders=4)
+    few_orders = purchase(mode="air", mode_risk={"air": 0.05, "multimodal": 0.60}, air_orders=1, total_orders=1)
+    assert review(few_orders, ENVELOPE) == []           # a share limit means nothing over two orders
     assert review(needed, ENVELOPE) == []
     verdict = review(unneeded, ENVELOPE)[0]
-    assert (verdict.rule, verdict.severity, verdict.voice, verdict.suggestion) == ("AIR_SHARE", "warn", "esgGuardian", {"mode": "multimodal"})
-    assert verdict.ok is True and verdict.message_facts["multimodal_risk_pct"] == 8
+    assert (verdict.rule, verdict.severity, verdict.voice, verdict.suggestion) == ("AIR_UNNEEDED", "warn", "esgGuardian", {"mode": "multimodal"})
+    assert verdict.ok is True and verdict.message_facts == {"air_risk_pct": 5, "multimodal_risk_pct": 8}
+    # with every option costed, the slower mode must be no worse overall, not merely close on probability
+    air = {"mode": "air", "freight_cost": 30.0, "co2_kg": 2.0, "par_shortage": 700.0, "stockout_prob": 0.98}
+    slow = {"mode": "multimodal", "freight_cost": 17.0, "co2_kg": 0.2, "par_shortage": 1650.0, "stockout_prob": 1.0}
+    envelope = {**ENVELOPE, "carbon_price": 2.0}
+    assert review(purchase(mode="air", modes=[air, slow]), envelope) == []                 # air saves far more than it costs
+    assert rules(review(purchase(mode="air", modes=[air, {**slow, "par_shortage": 705.0}]), envelope)) == [("AIR_UNNEEDED", "warn")]
     assert rules(review(over_share, ENVELOPE)) == [("AIR_SHARE", "warn")]
 
 

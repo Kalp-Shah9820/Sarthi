@@ -20,13 +20,14 @@ MAX_AIR_SHARE = {"Balanced": 0.2, "Cash Flow": 0.1, "Growth": 0.4}
 ESG_LABEL = {"Balanced": "RAIL_BALANCED", "Growth": "AIR_PRIORITY", "Cash Flow": "SEA_SAVER"}
 ESG_FLOOR = 50.0
 AIR_RISK_MARGIN = 0.05     # air is not justified when a slower mode is within 5 points of stockout risk
+MIN_ORDERS_FOR_SHARE = 5   # the air-share limit only applies once there are enough orders for a share to mean something
 
 
 @dataclass
 class Verdict:
     ok: bool
     severity: str               # "block" | "warn"
-    rule: str                   # SUPPLIER_ESG_FLOOR, USER_PREFERENCE, MOQ, SHELF_LIFE_CAP, BUDGET_CAP, AIR_SHARE, AUTO_LIMIT, CAPACITY
+    rule: str                   # SUPPLIER_ESG_FLOOR, USER_PREFERENCE, MOQ, SHELF_LIFE_CAP, BUDGET_CAP, AIR_SHARE, AIR_UNNEEDED, AUTO_LIMIT, CAPACITY
     voice: str                  # "cfoAgent" | "esgGuardian"
     message_facts: dict         # the numbers behind the verdict
     suggestion: dict | None     # e.g. {"qty": 480}, {"mode": "multimodal"}, {"supplier_id": "SUP-HUL"}
@@ -102,13 +103,28 @@ def review(proposal: dict, envelope: dict, committed_value: float = 0.0) -> list
         risk = proposal.get("mode_risk", {})
         total = proposal.get("total_orders", 0)
         share_after = (proposal.get("air_orders", 0) + 1) / (total + 1)
-        over_share = total > 0 and share_after > envelope.get("max_air_share", 1.0)
-        unneeded = "air" in risk and "multimodal" in risk and risk["multimodal"] - risk["air"] <= AIR_RISK_MARGIN
-        if over_share or unneeded:
-            facts = {"air_share_pct": round(share_after * 100), "max_air_share_pct": round(envelope.get("max_air_share", 1.0) * 100)}
-            if unneeded:
-                facts.update(air_risk_pct=round(risk["air"] * 100), multimodal_risk_pct=round(risk["multimodal"] * 100))
-            verdicts.append(_warn("AIR_SHARE", "esgGuardian", facts, {"mode": "multimodal"}))
+        over_share = total + 1 >= MIN_ORDERS_FOR_SHARE and share_after > envelope.get("max_air_share", 1.0)
+        costed = {m["mode"]: m for m in proposal.get("modes", [])}
+        if "air" in costed and "multimodal" in costed:
+            # With every option costed, air is unneeded only if the slower mode is no worse overall:
+            # freight + priced carbon + the stockout exposure it leaves.
+            price = envelope.get("carbon_price", 0.0)
+
+            def total_cost(m: dict) -> float:
+                return m["freight_cost"] + price * m["co2_kg"] + m["par_shortage"]
+
+            unneeded = total_cost(costed["multimodal"]) <= total_cost(costed["air"])
+            risk = {mode: m["stockout_prob"] for mode, m in costed.items()}
+        else:   # only the risks are known (e.g. an order typed in by hand): compare those
+            unneeded = "air" in risk and "multimodal" in risk and risk["multimodal"] - risk["air"] <= AIR_RISK_MARGIN
+        if unneeded:
+            verdicts.append(_warn("AIR_UNNEEDED", "esgGuardian",
+                                  {"air_risk_pct": round(risk["air"] * 100), "multimodal_risk_pct": round(risk["multimodal"] * 100)},
+                                  {"mode": "multimodal"}))
+        elif over_share:
+            verdicts.append(_warn("AIR_SHARE", "esgGuardian",
+                                  {"air_share_pct": round(share_after * 100),
+                                   "max_air_share_pct": round(envelope.get("max_air_share", 1.0) * 100)}, {"mode": "multimodal"}))
 
     limit = envelope.get("auto_max_order_value")
     if limit is not None and value > limit:
