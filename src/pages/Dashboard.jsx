@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, Bar, BarChart } from "recharts";
-import { skuData, monthLabels, zoneInfo } from "../data/appData.js";
+import { skuData, monthLabels, zoneInfo, live } from "../data/appData.js";
 import { C } from "../theme.js";
 import { CustomTooltip, SectionLabel, Tag, SarthiIcon } from "../components/ui.jsx";
 import { useSarthi } from "../context/SarthiContext.jsx";
@@ -21,7 +21,7 @@ function RiskSignals() {
     <div className="glass" style={{ borderRadius: 20, padding: 24, height: "100%" }}>
       <SectionLabel>{i18n[lang].globalRisk}</SectionLabel>
       <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 20 }}>
-        {riskSignals.map(s => (
+        {(live.riskSignals ?? riskSignals).map(s => (
           <div key={s.id} style={{ display: "flex", gap: 16, padding: "12px 16px", background: C.surface, borderRadius: 12, border: `1px solid ${s.severity === "HIGH" ? C.chaos : s.severity === "MEDIUM" ? C.money : C.border}` }}>
             <div style={{ color: s.severity === "HIGH" ? C.chaos : C.muted, display: "flex", alignItems: "center" }}>
               <SarthiIcon name={s.icon} size={24} />
@@ -32,7 +32,7 @@ function RiskSignals() {
                 <div style={{ width: 4, height: 4, borderRadius: "50%", background: C.border }} />
                 <span style={{ fontFamily: "'DM Mono'", fontSize: 10, color: C.muted }}>{s.skus} {i18n[lang].skusAtRisk}</span>
               </div>
-              <div style={{ fontSize: 13, fontWeight: 500, color: C.text, lineHeight: 1.4 }}>{i18n[lang][s.msgKey]}</div>
+              <div style={{ fontSize: 13, fontWeight: 500, color: C.text, lineHeight: 1.4 }}>{s.msg ?? i18n[lang][s.msgKey]}</div>
             </div>
           </div>
         ))}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { aisles, mbaRules, zoneInfo } from "../data/appData.js";
+import { aisles, live, mbaRules, zoneInfo } from "../data/appData.js";
 import { i18n } from "../data/i18n.js";
 import { C } from "../theme.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
@@ -204,7 +204,7 @@ function StoreViz() {
       <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:"28px", marginTop:16 }}>
         <SectionLabel>{i18n[lang].topCoPurchasePairs}</SectionLabel>
         <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={[
+          <BarChart data={(live.coPurchasePairs ?? null)?.map(p => ({ pair: `${i18n[lang][p.from]} → ${i18n[lang][p.to]}`, strength: p.strength })) ?? [
             { pair: `${i18n[lang].a} → ${i18n[lang].b}`,      strength:84 },
             { pair: `${i18n[lang].c} → ${i18n[lang].d}`,  strength:78 },
             { pair: `${i18n[lang].e} → ${i18n[lang].b}`,    strength:72 },

@@ -26,9 +26,9 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 | Backend milestone 8: orchestration | Done. All agents run as one pipeline; proposals are debated and ruled on with a confidence score; the system learns from approvals and feedback. |
 | Backend milestone 9: HTTP API | Done. One endpoint returns every screen's data in the shapes the screens already use; others carry out the buttons' actions (approve, dismiss, order, transfer, campaign, upload, what-if) and stream agent activity live. |
 | Backend milestone 10: chat, strategy and voice | Done. Questions are answered from live data, a typed sentence can change the strategy the agents follow, voice commands are understood against the real catalogue, and any product's situation can be explained in a sentence. |
-| Milestone 11: connecting the screens to the backend | Not built yet. |
+| Milestone 11: connecting the screens to the backend | Done. Every screen reads from and writes to the backend, with no change to how it looks. With the backend stopped, the screens fall back to their built-in sample data. |
 
-So today the two halves run side by side but are not connected: the screens show sample numbers, and the backend holds a database of demo history and four agents can analyse it into per-product decisions, and the full agent pipeline runs end to end, producing alerts for a manager to approve. The backend now serves all of that over HTTP, but the screens do not call it yet.
+The two halves are connected: the screens show what the agents computed from the database, and the buttons (approve, dismiss, order, transfer, launch campaign, upload, sync, chat, voice, what-if) act on the backend.
 
 ## What you need installed
 
@@ -120,7 +120,7 @@ cd "C:\Users\Kalp Shah\Desktop\Sarthi"
 npm run dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://localhost:5173`. The dev server forwards the app's `/api` calls to the backend on port 8000 (set `SARTHI_API_TARGET` before `npm run dev` if the backend runs elsewhere). Start the backend first; if it is not running the app still opens and shows its built-in sample data.
 
 ## Local language model (optional)
 
@@ -145,6 +145,8 @@ Settings live in `backend/.env`. The ones you are most likely to change:
 | `SARTHI_LLM_ENABLED` | `true` | Set `false` to run without any model |
 | `SARTHI_WEATHER_ENABLED` | `true` | Allow free weather lookups (the only outside call) |
 | `SARTHI_DB_PATH` | `data/sarthi.db` | Database file location |
+| `SARTHI_RERUN_AFTER_ACTION` | `true` | After an order, transfer or approval the agents run again so the screens reflect it |
+| `SARTHI_DECISION_MEMORY_DAYS` | `7` | How long a dismissed recommendation is not raised again |
 
 ## Checking that everything works
 
@@ -182,7 +184,8 @@ Individual checks:
 | Tests or forecasting are several times slower than usual | The laptop is on battery, which throttles the processor. Plug it in. |
 | VS Code underlines `import sarthi...` as unresolved | Select the interpreter `backend\.venv\Scripts\python.exe` (Ctrl+Shift+P, "Python: Select Interpreter"). The code runs fine either way. |
 | Port 8000 already in use | Another backend is running, possibly one left behind when a terminal was closed without pressing Ctrl+C. Find it with `netstat -ano \| findstr :8000` and end that process in Task Manager, or start with `uv run sarthi serve --port 8001`. |
-| Screens show the same numbers regardless of the backend | Expected for now: the screens are connected to the backend in milestone 11. |
+| Screens show the built-in sample numbers | The backend is not running, or its first analysis run has not finished (about a minute after the very first start). The screens switch to live data by themselves within 15 seconds of it being ready. |
+| Screens show nothing after a backend change | Open the browser console (F12). `uv run sarthi validate` includes a `frontend wiring` check that names any screen asking for something the backend does not serve. |
 
 ## How the finished system will work
 

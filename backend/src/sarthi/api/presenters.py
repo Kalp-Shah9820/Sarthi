@@ -6,7 +6,7 @@ Nothing here computes a decision: every number was produced by an agent during t
 
 import statistics
 import threading
-from datetime import date
+from datetime import UTC, date, timedelta
 
 from sqlalchemy import func
 from sqlmodel import select
@@ -24,6 +24,7 @@ from sarthi.models import (
     Aisle,
     Alert,
     Campaign,
+    Event,
     Location,
     PriceHistory,
     RiskSignal,
@@ -35,6 +36,7 @@ from sarthi.models import (
     StrategyPolicy,
     Supplier,
     Upload,
+    utcnow,
 )
 from sarthi.orchestrator.runner import active_strategy, latest_run_id
 from sarthi.seed.catalog import REGIONS, STORE_ID
@@ -45,7 +47,8 @@ TONE = {"forecaster": "ghost", "esgGuardian": "ghost", "riskAgent": "chaos", "cf
 MAP_TYPE = {"LOGISTICS": "port", "TRANSPORT": "strike"}
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 DRIFT_DAYS = 7
-AUDIT_ROWS = 12
+AUDIT_ROWS = 30                 # recent actions across runs; the panel scrolls
+RECENT_APPROVED_HOURS = 24      # approvals stay on the Alerts list this long, even after newer runs
 PRICE_MONTHS = 6
 TOP_PAIRS = 7
 REFERENCE_KM, REFERENCE_QTY = 500.0, 500      # the order behind the general shipping cards
@@ -229,6 +232,11 @@ def _build(run_id: int, lang: str) -> dict:
             select(SkuSnapshot).where(SkuSnapshot.run_id == run_id, SkuSnapshot.as_of == today)).all()}
         alerts = s.exec(select(Alert).where(Alert.run_id == run_id, Alert.status.in_(("open", "approved")))
                         .order_by(Alert.impact_value.desc(), Alert.id)).all()
+        since = utcnow() - timedelta(hours=RECENT_APPROVED_HOURS)
+        earlier = [a for a in s.exec(select(Alert).where(Alert.run_id != run_id, Alert.status == "approved")).all()
+                   if a.decided_at and (a.decided_at if a.decided_at.tzinfo else a.decided_at.replace(tzinfo=UTC)) >= since]
+        trail = s.exec(select(Event).join(Run, Run.id == Event.run_id).where(Event.kind == "action", Run.dry_run.is_(False))
+                       .order_by(Event.id.desc()).limit(AUDIT_ROWS)).all()
         signals = s.exec(select(RiskSignal).where(RiskSignal.active).order_by(RiskSignal.id)).all()
         aisles = s.exec(select(Aisle).order_by(Aisle.id)).all()
         prices = s.exec(select(PriceHistory).order_by(PriceHistory.month)).all()
@@ -260,6 +268,7 @@ def _build(run_id: int, lang: str) -> dict:
         supplier = suppliers.get((order or {}).get("supplier_id") or m.get("supplier_id") or primary.get(sku.id))
         usual = suppliers.get(m.get("supplier_id") or primary.get(sku.id))
         vel, lead, risk = round(m["velocity"]), round(m["lead_mean"]), int(m["risk"])
+        stockout = int(m.get("risk_shortage", risk))     # `risk` also covers overstock; this is the chance of running out
         qty = int(order["qty"]) if order else round(vel * lead * 1.3)
 
         km = REFERENCE_KM
@@ -282,12 +291,12 @@ def _build(run_id: int, lang: str) -> dict:
             "forecast": [round(v) for v in f.get("monthly_backcast", [])],
             "sales": [round(v) for v in f.get("monthly_actual", [])],
             "daysStock": round(m["doc"]), "esg": round(usual.esg_score) if usual else 0,
-            "co2": f"{options[chosen]['co2_kg']:.2f}", "stockoutProb": risk,
+            "co2": f"{options[chosen]['co2_kg']:.2f}", "stockoutProb": stockout,
             "lastReorder": m.get("last_reorder", ""),
             "decisionStatus": ("critical" if risk > 60 else "pending") if sku.id in open_alert else "auto",
             "supplier": usual.name if usual else "", "tier": usual.tier if usual else "", "recommendedQty": qty,
         })
-        monte_carlo[sku.id] = {"stockoutProb": risk, "p95Stock": int(m.get("p95_stock", 0)), "sigma": m.get("sigma", 0),
+        monte_carlo[sku.id] = {"stockoutProb": stockout, "p95Stock": int(m.get("p95_stock", 0)), "sigma": m.get("sigma", 0),
                                "bins": m.get("mc_bins", []), "daysOfCover": f"{m['doc']:.1f}"}
 
     # aisles: live heat and links from this run's baskets; the zone is where most of the aisle's products sit
@@ -340,10 +349,10 @@ def _build(run_id: int, lang: str) -> dict:
             "riskSignals": cards,
             "mapRisks": pins,
             "drift": drift,
-            "alerts": [_alert_view(a, lang) for a in alerts],
+            "alerts": [_alert_view(a, lang) for a in sorted([*alerts, *earlier], key=lambda a: (-a.impact_value, a.id))],
             "auditTrail": [{"ts": local_time(e.ts), "agentKey": e.agent, "text": e.text or "", "result": e.value.get("result", "")}
-                           for e in reversed(bb.events(kind="action")[-AUDIT_ROWS:])],
-            "sharedContext": [{"key": c["key"], "value": c["value"], "agentKey": c["agent"], "tone": c["tone"],
+                           for e in trail],
+            "sharedContext": [{"key": c["key"], "value": str(c["value"]), "agentKey": c["agent"], "tone": c["tone"],
                                "updated": local_time(c["ts"])} for c in context if c["key"] != "phase"],
             "debate": [debate_line({"agent": e.agent, "text": e.text, "value": e.value}, lang) for e in bb.events(kind="debate")],
             "esg": {"recommendedIndex": esg.recommend(general, mode), "options": _shipping_cards(general), "bySku": esg_by_sku},

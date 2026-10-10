@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from sarthi.agents.execution_engine import execute_alert
 from sarthi.api import presenters
+from sarthi.api.routers import runs
 from sarthi.db import session
 from sarthi.learning import memory
 from sarthi.llm import get_llm
@@ -42,13 +43,15 @@ def approve(alert_id: int, background: BackgroundTasks, body: Decision | None = 
         if alert.status == "dismissed":
             raise HTTPException(status_code=409, detail="alert was already dismissed")
         if alert.txid:
-            return {"txid": alert.txid, "status": "approved"}
+            return {"txid": alert.txid, "status": "approved", "runStarted": False}
         result = execute_alert(alert_id, source="alert")
         alert, _ = memory.note_decision(alert_id, True, feedback or None)
         presenters.bump()
     if feedback:
         background.add_task(_learn_from_feedback, alert, "approved", feedback)
-    return {"txid": result["txid"], "status": "approved"}
+    # stock or orders changed: let the agents look again (a count or a cap changes nothing they would see)
+    started = result["kind"] in ("purchase", "transfer") and runs.rerun_after_action()
+    return {"txid": result["txid"], "status": "approved", "runStarted": bool(started)}
 
 
 @router.post("/alerts/{alert_id}/dismiss")

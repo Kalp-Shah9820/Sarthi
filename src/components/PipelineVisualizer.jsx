@@ -1,5 +1,6 @@
 import { useLocation } from "react-router-dom";
 import { i18n } from "../data/i18n.js";
+import { live } from "../data/appData.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
 import { C } from "../theme.js";
 import { SarthiIcon } from "./ui.jsx";
@@ -58,7 +59,7 @@ export default function PipelineVisualizer() {
                     background: C.accent, color: C.bg, fontSize: 8, 
                     padding: "1px 4px", borderRadius: 3, fontWeight: 800 
                 }}>
-                    23 {i18n[lang].signs}
+                    {live.pipeline?.signals ?? 23} {i18n[lang].signs}
                 </div>
               </div>
               <div style={{ 

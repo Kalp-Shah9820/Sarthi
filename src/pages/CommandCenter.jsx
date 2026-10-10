@@ -1,27 +1,28 @@
 import { useState, useMemo } from "react";
-import { skuData, distributors } from "../data/appData.js";
+import { skuData, distributors, live } from "../data/appData.js";
 import { i18n } from "../data/i18n.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
 import { C } from "../theme.js";
 import { SectionLabel, Tag, CustomTooltip, SarthiIcon } from "../components/ui.jsx";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-// Extend SKU data with more enterprise metrics for the Command Center
-const richSkuData = skuData.map((s, i) => ({
-    ...s,
-    daysStock: Math.floor(Math.random() * 45) + 2,
-    margin: Math.floor(Math.random() * 25) + 12,
-    esg: Math.floor(Math.random() * 40) + 55,
-    co2: (Math.random() * 1.5 + 0.2).toFixed(2),
-    stockoutProb: Math.floor(Math.random() * 60) + 5,
-    lastReorder: "2026-03-" + (Math.floor(Math.random() * 10) + 1).toString().padStart(2, '0'),
-    decisionStatus: i % 5 === 0 ? "critical" : i % 3 === 0 ? "pending" : "auto",
-    supplier: distributors[i % distributors.length]?.name || "Local Vendor",
-    tier: distributors[i % distributors.length]?.tier || "Bronze"
-}));
-
 export default function CommandCenter() {
-  const { lang, strategy } = useSarthi();
+  const { lang, strategy, dataVersion } = useSarthi();
+
+  // Extend SKU data with more enterprise metrics for the Command Center.
+  // The backend supplies them; the placeholders are used only when it is not reachable.
+  const richSkuData = useMemo(() => skuData.map((s, i) => ({
+    ...s,
+    daysStock: s.daysStock ?? Math.floor(Math.random() * 45) + 2,
+    esg: s.esg ?? Math.floor(Math.random() * 40) + 55,
+    co2: s.co2 ?? (Math.random() * 1.5 + 0.2).toFixed(2),
+    stockoutProb: s.stockoutProb ?? Math.floor(Math.random() * 60) + 5,
+    lastReorder: s.lastReorder ?? "2026-03-" + (Math.floor(Math.random() * 10) + 1).toString().padStart(2, '0'),
+    decisionStatus: s.decisionStatus ?? (i % 5 === 0 ? "critical" : i % 3 === 0 ? "pending" : "auto"),
+    supplier: s.supplier ?? (distributors[i % distributors.length]?.name || "Local Vendor"),
+    tier: s.tier ?? (distributors[i % distributors.length]?.tier || "Bronze")
+  })), [dataVersion]);
+
   const [search, setSearch] = useState("");
   const [zoneFilter, setZoneFilter] = useState("all");
   const [sortConfig, setSortConfig] = useState({ key: "par", direction: "desc" });
@@ -42,7 +43,19 @@ export default function CommandCenter() {
         if (sortConfig.direction === "asc") return valA > valB ? 1 : -1;
         return valA < valB ? 1 : -1;
       });
-  }, [search, zoneFilter, sortConfig]);
+  }, [search, zoneFilter, sortConfig, richSkuData]);
+
+  const exportCsv = () => {
+    const cols = ["id", "name", "cat", "zone", "stock", "daysStock", "vel", "risk", "par", "esg", "co2", "lastReorder", "decisionStatus", "supplier", "tier"];
+    const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [cols.join(","), ...filteredData.map(s => cols.map(c => cell(s[c])).join(","))].join("\r\n");
+    const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "sarthi-skus.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const toggleSort = (key) => {
     setSortConfig(prev => ({
@@ -70,7 +83,7 @@ export default function CommandCenter() {
           <h1 style={{ fontSize: 40, fontWeight: 700 }}>{i18n[lang].enterpriseHub}</h1>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
-            <button className="glass" style={{ padding: "10px 20px", borderRadius: 10, color: C.text, fontSize: 13, cursor: "pointer" }}>{i18n[lang].exportCSV}</button>
+            <button onClick={exportCsv} className="glass" style={{ padding: "10px 20px", borderRadius: 10, color: C.text, fontSize: 13, cursor: "pointer" }}>{i18n[lang].exportCSV}</button>
             <button style={{ padding: "10px 20px", borderRadius: 10, background: C.accent, color: C.bg, border: "none", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>{i18n[lang].bulkActions} ({selectedRows.length})</button>
         </div>
       </div>
@@ -273,11 +286,11 @@ export default function CommandCenter() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 32 }}>
               <div className="glass" style={{ padding: 16, borderRadius: 12 }}>
                 <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{i18n[lang].avgStockoutRisk}</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: selectedZoneForExplanation.color }}>{selectedZoneForExplanation.id === "sweet" ? "2.4%" : selectedZoneForExplanation.id === "chaos" ? "42.1%" : "12.8%"}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: selectedZoneForExplanation.color }}>{live.zoneStats?.[selectedZoneForExplanation.id]?.avgRisk ?? (selectedZoneForExplanation.id === "sweet" ? "2.4%" : selectedZoneForExplanation.id === "chaos" ? "42.1%" : "12.8%")}</div>
               </div>
               <div className="glass" style={{ padding: 16, borderRadius: 12 }}>
                 <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{i18n[lang].decisionConfidence}</div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: C.sweet }}>{selectedZoneForExplanation.id === "sweet" ? "99.8%" : "92.4%"}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: C.sweet }}>{live.zoneStats?.[selectedZoneForExplanation.id]?.confidence ?? (selectedZoneForExplanation.id === "sweet" ? "99.8%" : "92.4%")}</div>
               </div>
             </div>
 

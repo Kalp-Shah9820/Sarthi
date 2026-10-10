@@ -1,18 +1,19 @@
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { skuData, zoneInfo } from "../data/appData.js";
+import { skuData, zoneInfo, live } from "../data/appData.js";
+import { api } from "../api/client.js";
 import { C } from "../theme.js";
 import { CustomTooltip, SectionLabel, Tag, SarthiIcon } from "../components/ui.jsx";
 import { useSarthi } from "../context/SarthiContext.jsx";
 import { i18n } from "../data/i18n.js";
 
 function Alerts() {
-  const { lang } = useSarthi();
+  const { lang, refreshData, refreshAfterRun } = useSarthi();
   const [dismissed, setDismissed] = useState([]);
-  const [approved, setApproved] = useState([]);
+  const [approved, setApproved] = useState(() => (live.alerts ?? []).filter(a => a.status === "approved").map(a => a.id));
   const [feedback, setFeedback] = useState({});
 
-  const all = [
+  const all = (live.alerts ?? [
     { id: 1, sku: "Lays Classic 26g", zone: "chaos", risk: 84, confidence: 94, msg: i18n[lang].alert1msg, action: i18n[lang].alert1action, impact: i18n[lang].alert1impact },
     { id: 2, sku: "Haldirams Namkeen 400g", zone: "chaos", risk: 78, confidence: 89, msg: i18n[lang].alert2msg, action: i18n[lang].alert2action, impact: i18n[lang].alert2impact },
     { id: 3, sku: "Colgate Strong 200g", zone: "chaos", risk: 71, confidence: 67, msg: i18n[lang].alert3msg, action: i18n[lang].alert3action, impact: i18n[lang].alert3impact },
@@ -20,7 +21,7 @@ function Alerts() {
     { id: 5, sku: "Fortune Oil 5L", zone: "money", risk: 52, confidence: 74, msg: i18n[lang].alert5msg, action: i18n[lang].alert5action, impact: i18n[lang].alert5impact },
     { id: 6, sku: "Tata Salt 1kg", zone: "money", risk: 45, confidence: 58, msg: i18n[lang].alert6msg, action: i18n[lang].alert6action, impact: i18n[lang].alert6impact },
     { id: 7, sku: "Haldirams → Lays", zone: "chaos", risk: 72, confidence: 91, msg: i18n[lang].alert7msg, action: i18n[lang].alert7action, impact: i18n[lang].alert7impact },
-  ].filter(a => !dismissed.includes(a.id));
+  ]).filter(a => !dismissed.includes(a.id));
 
   return (
     <div style={{ animation: "fadeIn 0.5s ease" }}>
@@ -100,7 +101,7 @@ function Alerts() {
               {!isApproved ? (
                 <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                    <button 
-                    onClick={() => setApproved(prev => [...prev, alert.id])}
+                    onClick={() => { setApproved(prev => [...prev, alert.id]); api.post(`/alerts/${alert.id}/approve`, { feedback: feedback[alert.id] }).then(r => { if (r) { refreshData(); if (r.runStarted) refreshAfterRun(); } }); }}
                     style={{ 
                         flex: 1, background: z.color, color: C.bg, border: "none", 
                         borderRadius: 12, padding: "12px 24px", fontFamily: "'Sora'", 
@@ -112,7 +113,7 @@ function Alerts() {
                      {alert.action}
                    </button>
                    <button 
-                    onClick={() => setDismissed(prev => [...prev, alert.id])}
+                    onClick={() => { setDismissed(prev => [...prev, alert.id]); api.post(`/alerts/${alert.id}/dismiss`, { feedback: feedback[alert.id] }); }}
                     style={{ 
                         background: "transparent", border: `1px solid ${C.border}`, color: C.muted, 
                         borderRadius: 12, padding: "12px 20px", fontSize: 14, cursor: "pointer" 
@@ -136,7 +137,7 @@ function Alerts() {
                      <SarthiIcon name="CheckCircle" size={16} /> {i18n[lang].autoApproved} · {i18n[lang].rlhfUpdated}
                    </div>
                    <div style={{ fontSize: 11, color: C.muted, fontFamily: "'DM Mono'" }}>
-                     TXID: S-{alert.id}B47X
+                     TXID: {alert.txid ?? `S-${alert.id}B47X`}
                    </div>
                 </div>
               )}

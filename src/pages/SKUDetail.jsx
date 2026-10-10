@@ -1,5 +1,5 @@
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from "recharts";
-import { cannibalization, distributors, mbaRules, monthLabels, skuMonteCarlo, zoneInfo } from "../data/appData.js";
+import { cannibalization, distributors, live, mbaRules, monthLabels, skuMonteCarlo, zoneInfo } from "../data/appData.js";
 import { C } from "../theme.js";
 import { CustomTooltip, SectionLabel, Tag, SarthiIcon } from "../components/ui.jsx";
 import { useSarthi } from "../context/SarthiContext.jsx";
@@ -31,6 +31,10 @@ export default function SKUDetail({ sku, setPage }) {
   const stockPct = Math.min(100, (sku.stock / (sku.safetyStock * 2)) * 100);
   const gaugeColor = sku.stock < sku.safetyStock ? C.chaos : sku.stock < sku.reorderPoint ? C.money : C.sweet;
 
+  // shipping numbers for this SKU from the backend, when it is reachable
+  const liveEsg = live.esg?.bySku?.[sku.id]?.options ?? live.esg?.options;
+  const options = esgOptions.map((o, i) => ({ ...o, ...(liveEsg?.[i] ? { tat: liveEsg[i].tat, co2Key: liveEsg[i].co2Key, co2Pct: liveEsg[i].co2Pct } : {}) }));
+
   return (
     <div style={{ animation: "fadeIn 0.5s ease" }}>
       <button onClick={() => setPage("inventory")} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: "8px 16px", fontFamily: "'Inter'", fontSize: 13, cursor: "pointer", marginBottom: 32, transition: "all 0.2s", display:"flex", alignItems:"center", gap:6 }} onMouseEnter={e => e.currentTarget.style.color = C.text}>
@@ -58,7 +62,7 @@ export default function SKUDetail({ sku, setPage }) {
           { l: i18n[lang].currentStock, v: `${sku.stock}`, c: C.text },
           { l: i18n[lang].velocityLabel, v: `${sku.vel}/d`, c: C.sweet },
           { l: i18n[lang].daysCover, v: `${daysLeft}d`, c: daysLeft < sku.lead ? C.chaos : C.sweet },
-          { l: i18n[lang].esgScoreDetail, v: `${Math.round(85 + Math.random() * 10)}%`, c: C.ghost },
+          { l: i18n[lang].esgScoreDetail, v: `${sku.esg ?? Math.round(85 + Math.random() * 10)}%`, c: C.ghost },
         ].map(s => (
           <div key={s.l} className="glass" style={{ borderRadius: 16, padding: "20px" }}>
             <div style={{ fontFamily: "'DM Mono'", fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>{s.l}</div>
@@ -93,7 +97,7 @@ export default function SKUDetail({ sku, setPage }) {
             <div className="glass" style={{ borderRadius: 20, padding: 24 }}>
                 <SectionLabel>{i18n[lang].esgComplianceFeed}</SectionLabel>
                 <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-                    {esgOptions.map(opt => (
+                    {options.map(opt => (
                         <div key={opt.modeKey} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}33` }}>
                             <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                                 <SarthiIcon name={opt.icon} size={20} color={C.text} />

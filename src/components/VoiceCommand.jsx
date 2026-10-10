@@ -3,6 +3,7 @@ import { Mic } from "lucide-react";
 import { C } from "../theme.js";
 import { i18n } from "../data/i18n.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
+import { api } from "../api/client.js";
 
 const skuAliases = {
   "lays": "SKU001",
@@ -22,7 +23,7 @@ const skuAliases = {
 };
 
 export default function VoiceCommand({ onCommand }) {
-  const { lang } = useSarthi();
+  const { lang, refreshAfterRun } = useSarthi();
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [error, setError] = useState("");
@@ -60,9 +61,15 @@ export default function VoiceCommand({ onCommand }) {
     }
   }, [lang]);
 
-  const handleFinalTranscript = (text) => {
+  // the backend understands the sentence against the real catalogue; offline, the keyword parsing below is used
+  const handleFinalTranscript = async (text) => {
     console.log("Final Transcript:", text);
-    
+    const cmd = await api.post("/voice/intent", { text, lang });
+    if (cmd) { onCommand(cmd); if (cmd.type === "PROCURE") refreshAfterRun(); } else localParse(text);
+    setTimeout(() => setTranscript(""), 3000);
+  };
+
+  const localParse = (text) => {
     // Simple Keyword Parsing
     let matchedSku = null;
     for (const [alias, id] of Object.entries(skuAliases)) {
@@ -89,8 +96,6 @@ export default function VoiceCommand({ onCommand }) {
         // Fallback or suggest
         onCommand({ type: "UNKNOWN", text });
     }
-    
-    setTimeout(() => setTranscript(""), 3000);
   };
 
   const toggleListen = () => {

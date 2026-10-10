@@ -84,6 +84,9 @@ const aisles = [
   { id:"K", label:"Health & OTC",  x:3, y:2, items:["Glucose-D","Ensure","Complan"],             heat:0.38, connections:["G"], zone:"ghost" },
 ];
 
+// Filled by src/api/hydrate.js when the backend is reachable; pages fall back to their own constants.
+const live = { online: false };
+
 // nav
 const navItems = [
   { id:"landing",   icon:"Home",  label:"Home" },
@@ -110,4 +113,5 @@ export {
   distributors,
   aisles,
   navItems,
+  live,
 };

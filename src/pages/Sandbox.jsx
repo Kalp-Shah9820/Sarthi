@@ -4,6 +4,8 @@ import { C } from "../theme.js";
 import { CustomTooltip, SectionLabel } from "../components/ui.jsx";
 import { i18n } from "../data/i18n.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
+import { live } from "../data/appData.js";
+import { api } from "../api/client.js";
 
 const debateMessages = (lang) => [
   { agent: i18n[lang].forecaster, color: C.ghost, msg: i18n[lang].debate1 },
@@ -23,26 +25,54 @@ export default function Sandbox() {
   const [stock, setStock] = useState(300);
   const [margin, setMargin] = useState(20);
   const [debateIdx, setDebateIdx] = useState(0);
+  const [sim, setSim] = useState(null);               // the backend's simulation for the current sliders
+  const [liveDebate, setLiveDebate] = useState(null); // the agents' debate on this scenario, once it arrives
 
   const daysLeft = Math.round(stock / demand);
-  const risk = Math.max(0, Math.min(100, Math.round(((lead - daysLeft) / (lead || 1)) * 100 + 20)));
-  const par = risk > 50 ? Math.round(risk * demand * margin * 0.8) : 0;
+  const localRisk = Math.max(0, Math.min(100, Math.round(((lead - daysLeft) / (lead || 1)) * 100 + 20)));
+  const localPar = localRisk > 50 ? Math.round(localRisk * demand * margin * 0.8) : 0;
+  const risk = sim?.risk ?? localRisk;
+  const par = sim?.par ?? localPar;
   const safetyStock = Math.round(demand * lead * 1.3);
 
-  const messages = debateMessages(lang);
+  const messages = liveDebate
+    ? liveDebate.map(m => ({ agent: i18n[lang][m.agentKey], color: C[m.tone] ?? C.ghost, msg: m.msg }))
+    : debateMessages(lang);
+
+  // ask the backend for the real numbers shortly after the sliders stop moving
+  useEffect(() => {
+    const t = setTimeout(async () => {
+      setSim(await api.post("/sandbox/simulate", { lead, demand, stock, margin }));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [lead, demand, stock, margin]);
+
+  // and let the agents debate the scenario
+  useEffect(() => {
+    if (!live.online) return;
+    let close = null;
+    const t = setTimeout(() => {
+      const lines = [];
+      close = api.stream(`/sandbox/debate/stream?lead=${lead}&demand=${demand}&stock=${stock}&margin=${margin}&lang=${lang}`,
+        (m) => { lines.push(m); setLiveDebate([...lines]); setDebateIdx(lines.length - 1); });
+    }, 1200);
+    return () => { clearTimeout(t); if (close) close(); };
+  }, [lead, demand, stock, margin, lang]);
 
   useEffect(() => {
+    if (liveDebate) return;                           // live lines appear as they arrive; the canned loop runs only offline
     const t = setInterval(() => {
       setDebateIdx(i => (i < messages.length - 1 ? i + 1 : 0));
     }, 3000);
     return () => clearInterval(t);
-  }, [messages.length]);
+  }, [messages.length, liveDebate]);
 
-  const sensitivityData = Array.from({ length: 15 }, (_, i) => {
+  const localSensitivity = Array.from({ length: 15 }, (_, i) => {
     const lt = i + 1;
     const r = Math.max(0, Math.min(100, Math.round(((lt - daysLeft) / (lt || 1)) * 100 + 20)));
     return { lt: `${lt}d`, risk: r };
   });
+  const sensitivityData = sim?.sensitivity ?? localSensitivity;
 
   return (
     <div style={{ animation: "fadeIn 0.5s ease" }}>

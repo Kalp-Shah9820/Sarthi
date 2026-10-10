@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { distributors, skuData, zoneInfo } from "../data/appData.js";
+import { distributors, live, skuData, zoneInfo } from "../data/appData.js";
+import { api } from "../api/client.js";
 import { C } from "../theme.js";
 import { CustomTooltip, SectionLabel, Tag } from "../components/ui.jsx";
 import { useSarthi } from "../context/SarthiContext.jsx";
@@ -33,7 +34,7 @@ const campaignTemplates = [
 ];
 
 function Replenish() {
-  const { strategy, lang } = useSarthi();
+  const { strategy, lang, refreshData, refreshAfterRun } = useSarthi();
   const [selected, setSelected] = useState(null);
   const [selectedDist, setSelectedDist] = useState({});  // skuId → distIndex
   const [draftOrder, setDraftOrder] = useState(null);     // { skuId, distIdx } — opens recommendations panel
@@ -41,16 +42,28 @@ function Replenish() {
   const [orderPrice, setOrderPrice] = useState({});       // skuId → edited price
   const [confirmModal, setConfirmModal] = useState(null);  // { skuId, distIdx } — "Are you sure?" popup
   const [orderSuccess, setOrderSuccess] = useState(null);  // { sku, dist, units, price } — after Proceed
-  const [selectedEsg, setSelectedEsg] = useState(2);       // default to Ikigai-Balanced
+  const [selectedEsg, setSelectedEsg] = useState(live.esg?.recommendedIndex ?? 2);       // default to the recommended option (Ikigai-Balanced offline)
   const [transferModal, setTransferModal] = useState(null); // { fromWH, toWH, skuId, units }
   const [transferSuccess, setTransferSuccess] = useState(null);
   const [campaignModal, setCampaignModal] = useState(null);
-  const [campaignLaunched, setCampaignLaunched] = useState([]);
-  const critical = skuData.filter(d => d.risk>60);
+  const [campaignLaunched, setCampaignLaunched] = useState(() =>
+    campaignTemplates.map((c, i) => (live.campaigns?.find(x => x.type === c.type)?.status === "live" ? i : -1)).filter(i => i >= 0));
+  const critical = skuData.filter(d => (d.stockoutProb ?? d.risk)>60);
+
+  // live data from the backend, each falling back to this page's own constants
+  const whList = live.warehouses ?? warehouses;
+  const esgCards = esgOptions.map((o, i) => ({ ...o, ...(live.esg?.options?.[i] ?? {}) }));
+  const camps = campaignTemplates.map(c => ({ ...c, ...(live.campaigns?.find(x => x.type === c.type) ?? {}) }));
+  const transferFrom = (wh) => {
+    const s = live.transfers
+      ? live.transfers.find(t => t.fromId === wh.id)
+      : (wh.id === "WH-DEL" ? { toId: "WH-MUM", toCity: "Mumbai", skuId: "SKU002", units: 200 } : null);
+    return s && whList.some(w => w.id === s.toId) ? s : null;
+  };
 
   // Dynamic chart based on selected SKU
   const selectedSku = skuData.find(s => s.id === selected);
-  const distChart = distributors.map(d => {
+  const distChart = (selectedSku && live.distributorScores?.[selectedSku.id]) || distributors.map(d => {
     let contextualScore = d.score;
     if (selectedSku) {
       if (selectedSku.cat === "Dairy" && d.name.includes("Reliance")) contextualScore += 4;
@@ -76,10 +89,10 @@ function Replenish() {
   ];
 
   // Generate and download a dummy receipt as printable HTML
-  const downloadReceipt = (sku, dist, units, price) => {
+  const downloadReceipt = (sku, dist, units, price, serverOrderId, receiptWindow) => {
     const total = (units * price).toFixed(2);
     const now = new Date();
-    const orderId = `PO-${Date.now().toString(36).toUpperCase()}`;
+    const orderId = serverOrderId ?? `PO-${Date.now().toString(36).toUpperCase()}`;
 
     const htmlContent = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${i18n[lang].replenish} - ${orderId}</title>
@@ -145,24 +158,29 @@ function Replenish() {
   <script>window.onload = function() { window.print(); }</script>
 </body></html>`;
 
-    const receiptWindow = window.open("", "_blank", "noopener,noreferrer");
     if (!receiptWindow) return;
-    receiptWindow.opener = null;
     receiptWindow.document.write(htmlContent);
     receiptWindow.document.close();
   };
 
   // Handle proceed from confirmation
-  const handleProceed = () => {
+  const handleProceed = async () => {
     if (!confirmModal) return;
     const sku = skuData.find(s => s.id === confirmModal.skuId);
     const dist = distributors[confirmModal.distIdx];
-    const units = orderUnits[confirmModal.skuId] || Math.round(sku.vel * sku.lead * 1.3);
-    const price = orderPrice[confirmModal.skuId] || sku.cogs;
-    downloadReceipt(sku, dist, units, price);
+    const units = orderUnits[confirmModal.skuId] || (sku.recommendedQty ?? Math.round(sku.vel * sku.lead * 1.3));
+    const price = orderPrice[confirmModal.skuId] || (live.replenishment?.[sku.id]?.price ?? sku.cogs);
+    // Open the receipt tab now, while the click still counts as the user's, and fill it once the order is placed.
+    // (It used to be opened with "noopener", for which the browser returns no window to write the receipt into.)
+    const receiptWindow = window.open("", "_blank");
+    if (receiptWindow) receiptWindow.opener = null;
+    const r = await api.post("/orders", { skuId: sku.id, distributor: dist.name, units, price, esgIndex: selectedEsg });
+    downloadReceipt(sku, dist, units, price, r?.orderId, receiptWindow);
     setOrderSuccess({ sku, dist, units, price });
     setConfirmModal(null);
     setDraftOrder(null);
+    refreshData();
+    if (r?.runStarted) refreshAfterRun();
   };
 
   return (
@@ -241,8 +259,8 @@ function Replenish() {
       {confirmModal && (() => {
         const sku = skuData.find(s => s.id === confirmModal.skuId);
         const dist = distributors[confirmModal.distIdx];
-        const units = orderUnits[confirmModal.skuId] || Math.round(sku.vel * sku.lead * 1.3);
-        const price = orderPrice[confirmModal.skuId] || sku.cogs;
+        const units = orderUnits[confirmModal.skuId] || (sku.recommendedQty ?? Math.round(sku.vel * sku.lead * 1.3));
+        const price = orderPrice[confirmModal.skuId] || (live.replenishment?.[sku.id]?.price ?? sku.cogs);
         return (
           <div style={{
             position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:1000,
@@ -299,10 +317,10 @@ function Replenish() {
       {draftOrder && (() => {
         const sku = skuData.find(s => s.id === draftOrder.skuId);
         const z = zoneInfo[sku.zone];
-        const agentUnits = Math.round(sku.vel * sku.lead * 1.3);
+        const agentUnits = (sku.recommendedQty ?? Math.round(sku.vel * sku.lead * 1.3));
         const units = orderUnits[sku.id] ?? agentUnits;
-        const price = orderPrice[sku.id] ?? sku.cogs;
-        const priceHistory = getPriceHistory(sku);
+        const price = orderPrice[sku.id] ?? (live.replenishment?.[sku.id]?.price ?? sku.cogs);
+        const priceHistory = live.replenishment?.[sku.id]?.priceHistory ?? getPriceHistory(sku);
         const popupDistIdx = selectedDist[sku.id] ?? draftOrder.distIdx;
         const dist = distributors[popupDistIdx];
 
@@ -593,7 +611,7 @@ function Replenish() {
           {i18n[lang].esgComparisonDesc}
         </div>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }}>
-          {esgOptions.map((opt, i) => {
+          {esgCards.map((opt, i) => {
             const isSelected = i === selectedEsg;
             return (
               <div key={opt.modeKey} onClick={() => setSelectedEsg(i)} style={{
@@ -602,7 +620,7 @@ function Replenish() {
                 borderRadius:14, padding:"22px", cursor:"pointer",
                 transition:"all 0.25s", position:"relative"
               }}>
-                {i===2 && (
+                {i === (live.esg?.recommendedIndex ?? 2) && (
                   <div style={{
                     position:"absolute", top:-10, right:12,
                     fontFamily:"'DM Mono'", fontSize:10, letterSpacing:1, textTransform:"uppercase",
@@ -647,7 +665,7 @@ function Replenish() {
           {i18n[lang].multiWhDesc}
         </div>
         <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:12 }}>
-          {warehouses.map(wh => (
+          {whList.map(wh => (
             <div key={wh.id} style={{
               background:C.bg, border:`1px solid ${C.border}`, borderRadius:12, padding:"18px"
             }}>
@@ -678,13 +696,13 @@ function Replenish() {
                   </div>
                 );
               })}
-              {wh.id === "WH-DEL" && (
-                <button onClick={() => setTransferModal({ from:wh, to:warehouses[0], skuId:"SKU002", units:200 })} style={{
+              {transferFrom(wh) && (
+                <button onClick={() => { const s = transferFrom(wh); setTransferModal({ from:wh, to:whList.find(w => w.id === s.toId), skuId:s.skuId, units:s.units }); }} style={{
                   width:"100%", marginTop:10, background:C.sweet+"22", color:C.sweet,
                   border:`1px solid ${C.sweet}44`, borderRadius:6, padding:"8px",
                   fontFamily:"'DM Mono'", fontSize:11, cursor:"pointer", transition:"all 0.2s"
                 }}>
-                  {i18n[lang].transferOverstock.replace("{city}", "Mumbai")}
+                  {i18n[lang].transferOverstock.replace("{city}", transferFrom(wh).toCity)}
                 </button>
               )}
             </div>
@@ -723,7 +741,7 @@ function Replenish() {
                 borderRadius:10, padding:"12px 28px", fontFamily:"'Inter'", fontWeight:600,
                 fontSize:14, cursor:"pointer"
               }}>{i18n[lang].back}</button>
-              <button onClick={() => { setTransferSuccess(transferModal); setTransferModal(null); }} style={{
+              <button onClick={async () => { const t = transferModal; const r = await api.post("/transfers", { skuId: t.skuId, fromId: t.from.id, toId: t.to.id, units: t.units }); setTransferSuccess({ ...t, id: r?.transferId }); setTransferModal(null); refreshData(); if (r?.runStarted) refreshAfterRun(); }} style={{
                 background:C.sweet, color:C.bg, border:"none", borderRadius:10,
                 padding:"12px 28px", fontFamily:"'Inter'", fontWeight:700, fontSize:14,
                 cursor:"pointer", boxShadow:`0 4px 16px ${C.sweet}44`
@@ -761,7 +779,7 @@ function Replenish() {
                 .replace("{to}", transferSuccess.to.name)}
             </div>
             <div style={{ fontFamily:"'DM Mono'", fontSize:12, color:C.sweet, marginBottom:16 }}>
-              ✓ {i18n[lang].transferOrderGenerated.replace("{id}", "TRF-"+Date.now().toString(36).toUpperCase().slice(0,5))}
+              ✓ {i18n[lang].transferOrderGenerated.replace("{id}", transferSuccess.id ?? ("TRF-"+Date.now().toString(36).toUpperCase().slice(0,5)))}
             </div>
             <button onClick={() => setTransferSuccess(null)} style={{
               background:C.text, color:C.bg, border:"none", borderRadius:10,
@@ -778,7 +796,7 @@ function Replenish() {
           {i18n[lang].launchCampaignDesc}
         </div>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }}>
-          {campaignTemplates.map((camp, i) => {
+          {camps.map((camp, i) => {
             const launched = campaignLaunched.includes(i);
             const zColor = camp.target === "ghost" ? C.ghost : camp.target === "chaos" ? C.chaos : C.money;
             return (
@@ -799,14 +817,14 @@ function Replenish() {
                 </div>
                 <div style={{ display:"flex", justifyContent:"space-between", fontFamily:"'DM Mono'", fontSize:11, marginBottom:12 }}>
                   <span style={{ color:C.muted }}>{i18n[lang].estImpact}</span>
-                  <span style={{ color:C.sweet, fontWeight:500 }}>{i18n[lang][camp.estKey]}</span>
+                  <span style={{ color:C.sweet, fontWeight:500 }}>{camp.estImpact ?? i18n[lang][camp.estKey]}</span>
                 </div>
                 {launched ? (
                   <div style={{ fontFamily:"'DM Mono'", fontSize:11, color:C.sweet, textAlign:"center", padding:"8px", background:C.sweet+"12", borderRadius:6 }}>
                     ✓ {i18n[lang].campaignLive}
                   </div>
                 ) : (
-                  <button onClick={() => setCampaignLaunched(prev => [...prev, i])} style={{
+                  <button onClick={() => { setCampaignLaunched(prev => [...prev, i]); api.post("/campaigns", { type: camp.type }); }} style={{
                     width:"100%", background:zColor, color:C.bg, border:"none",
                     borderRadius:8, padding:"10px", fontFamily:"'Inter'", fontWeight:700,
                     fontSize:13, cursor:"pointer", transition:"all 0.2s"

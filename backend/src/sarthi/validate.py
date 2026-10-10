@@ -644,9 +644,67 @@ def check_nlq() -> Result:
     return Result("nlq", status, detail + f"; live model routed {hits}/{len(NLQ_LIVE)} free-form questions")
 
 
+API_CALL = re.compile(r"""\bapi\.(get|post|put|upload|stream)\(\s*(["'`])(.*?)\2""", re.DOTALL)
+LIVE_READ = re.compile(r"\blive\.([A-Za-z_]\w*)")
+BOOT_READ = re.compile(r"\bb\.([A-Za-z_]\w*)")
+HTTP_METHOD = {"get": "get", "post": "post", "put": "put", "upload": "post", "stream": "get"}
+
+
+def check_frontend_wiring(root=None) -> Result:
+    """mk11: what the screens ask the backend for is what the backend serves. Reads source files only.
+
+    Every `api.<method>("/path")` call in the frontend must be an endpoint of the backend with that method,
+    and every `live.<name>` a page reads must be something `/api/bootstrap` sends.
+    """
+    from sarthi.api.main import create_app
+    from sarthi.config import BACKEND_ROOT
+
+    root = root or BACKEND_ROOT.parent
+    src = root / "src"
+    if not src.is_dir():
+        return Result("frontend wiring", WARN, f"no frontend source at {src}")
+    needed = [root / "vite.config.js", src / "api" / "client.js", src / "api" / "hydrate.js", src / "data" / "appData.js"]
+    missing = [str(p.relative_to(root)).replace("\\", "/") for p in needed if not p.exists()]
+    if missing:
+        return Result("frontend wiring", FAIL, "missing: " + ", ".join(missing))
+    problems = []
+    if "'/api'" not in needed[0].read_text(encoding="utf-8") and '"/api"' not in needed[0].read_text(encoding="utf-8"):
+        problems.append("vite.config.js does not forward /api to the backend")
+    if "const live" not in needed[3].read_text(encoding="utf-8"):
+        problems.append("appData.js does not export `live`")
+
+    served = {}
+    for path, methods in create_app().openapi()["paths"].items():
+        served[re.sub(r"\{[^}]*\}", "{}", path)] = set(methods)
+    calls, reads, hydrated = set(), set(), set()
+    for file in sorted(src.rglob("*.js*")):
+        if file.name in ("i18n.js", "client.js"):
+            continue
+        text = file.read_text(encoding="utf-8")
+        for method, _, literal in API_CALL.findall(text):
+            path = "/api" + re.sub(r"\$\{[^}]*\}", "{}", literal.split("?")[0])
+            calls.add((HTTP_METHOD[method], path, file.name))
+        reads |= {(name, file.name) for name in LIVE_READ.findall(text)}
+        if file.name == "hydrate.js":
+            hydrated = set(BOOT_READ.findall(text))
+    for method, path, where in sorted(calls):
+        if method not in served.get(path, ()):
+            problems.append(f"{where} calls {method.upper()} {path}, which the backend does not serve")
+    known = set(BOOTSTRAP_LIVE_KEYS)
+    problems += [f"{where} reads live.{name}, which /api/bootstrap does not send" for name, where in sorted(reads) if name not in known]
+    problems += [f"hydrate.js reads b.{name}, which /api/bootstrap does not send" for name in sorted(hydrated - set(BOOTSTRAP_KEYS))]
+    if not calls:
+        problems.append("the frontend makes no API calls")
+    if problems:
+        return Result("frontend wiring", FAIL, "; ".join(problems[:3]))
+    pages = len({where for _, _, where in calls} | {where for _, where in reads})
+    return Result("frontend wiring", PASS, f"{len({(m, p) for m, p, _ in calls})} API calls and {len({n for n, _ in reads})} live fields "
+                                           f"used by {pages} frontend files all exist on the backend")
+
+
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api, check_nlq,
+    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api, check_nlq, check_frontend_wiring,
 ]
 
 
@@ -658,8 +716,8 @@ def _run_tool(name: str, cmd: list[str], cwd) -> Result:
         return Result(name, FAIL, f"command not found: {cmd[0]}")
     lines = [ln for ln in (proc.stdout + proc.stderr).strip().splitlines() if ln.strip()]
     # The result line, not whatever was printed last: a native fault report can follow the summary.
-    summary = [ln for ln in lines if re.search(r"\b\d+ (passed|failed|error)", ln)]
-    tail = (summary or lines or [""])[-1].strip(" =")
+    summary = [ln for ln in lines if re.search(r"\b\d+ (passed|failed|error)|built in \d", ln)]
+    tail = re.sub(r"\x1b\[[0-9;]*m", "", (summary or lines or [""])[-1]).strip(" =")     # without colour codes
     faults = sum("Windows fatal exception" in ln or "Fatal Python error" in ln for ln in lines)
     if proc.returncode != 0:
         return Result(name, FAIL, tail[:160])

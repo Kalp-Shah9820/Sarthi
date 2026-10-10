@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { i18n } from "../data/i18n.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
+import { live } from "../data/appData.js";
+import { api } from "../api/client.js";
 import { C } from "../theme.js";
 import { SarthiIcon, SectionLabel, Tag } from "../components/ui.jsx";
 import { Box, BarChart3, Warehouse, Users, TrendingUp, AlertTriangle, MapPin, Leaf } from "lucide-react";
@@ -17,8 +19,8 @@ const uploadTypes = [
 ];
 
 export default function DataHub() {
-  const { lang } = useSarthi();
-  const [uploads, setUploads] = useState({}); // id -> { progress, status, records }
+  const { lang, refreshData } = useSarthi();
+  const [uploads, setUploads] = useState(live.dataHub?.uploads ?? {}); // id -> { progress, status, records }
   const [syncing, setSyncing] = useState(false);
   const fileInputRef = useRef(null);
   const [activeUploadId, setActiveUploadId] = useState(null);
@@ -31,9 +33,20 @@ export default function DataHub() {
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) {
-      simulateUpload(activeUploadId);
+      startUpload(activeUploadId, e.target.files[0]);
     }
     e.target.value = null;
+  };
+
+  // send the file to the backend; offline, the simulated upload below is used
+  const startUpload = async (id, file) => {
+    if (!live.online) { simulateUpload(id); return; }
+    if (uploads[id]?.status === "done") return;
+    setUploads(prev => ({ ...prev, [id]: { progress: 0, status: "uploading" } }));
+    const r = await api.upload(`/datahub/upload/${id}`, file, (p) => setUploads(prev => ({ ...prev, [id]: { ...prev[id], progress: Math.min(p, 95) } })));
+    setUploads(prev => r
+      ? ({ ...prev, [id]: { progress: 100, status: "done", records: r.records, time: r.time } })
+      : (({ [id]: _failed, ...rest }) => rest)(prev));      // failed upload: the card returns to its empty state
   };
 
   const simulateUpload = (id) => {
@@ -57,15 +70,20 @@ export default function DataHub() {
     }, 400);
   };
 
-  const runSync = () => {
+  const runSync = async () => {
     setSyncing(true);
+    const run = live.online ? await api.post("/runs") : null;
+    if (run) {                                          // watch the pipeline run, then show its results
+      api.stream(`/runs/${run.runId}/stream`, () => {}, async () => { await refreshData(); setSyncing(false); });
+      return;
+    }
     setTimeout(() => {
       setSyncing(false);
       // Toast would go here
     }, 3000);
   };
 
-  const allDone = Object.values(uploads).filter(u => u.status === "done").length === uploadTypes.length;
+  const allDone = live.online || Object.values(uploads).filter(u => u.status === "done").length === uploadTypes.length;
 
   return (
     <div style={{ animation: "fadeIn 0.5s ease" }}>
@@ -91,10 +109,10 @@ export default function DataHub() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20, marginBottom: 40 }}>
         {[
-          { label: i18n[lang].totalIngested, value: "42,847", color: C.sweet },
-          { label: i18n[lang].freshness, value: "98.2%", color: C.sweet },
-          { label: i18n[lang].joinQuality, value: "99.1%", color: C.sweet },
-          { label: i18n[lang].alertsGenerated, value: "23", color: C.chaos }
+          { label: i18n[lang].totalIngested, value: live.dataHub?.metrics?.totalIngested ?? "42,847", color: C.sweet },
+          { label: i18n[lang].freshness, value: live.dataHub?.metrics?.freshness ?? "98.2%", color: C.sweet },
+          { label: i18n[lang].joinQuality, value: live.dataHub?.metrics?.joinQuality ?? "99.1%", color: C.sweet },
+          { label: i18n[lang].alertsGenerated, value: live.dataHub?.metrics?.alertsGenerated ?? "23", color: C.chaos }
         ].map(m => (
           <div key={m.label} className="glass" style={{ padding: 20, borderRadius: 16 }}>
             <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontFamily: "'DM Mono'" }}>{m.label}</div>

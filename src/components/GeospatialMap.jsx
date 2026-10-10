@@ -2,10 +2,11 @@ import { C } from "../theme.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
 import { i18n } from "../data/i18n.js";
 import { SarthiIcon } from "./ui.jsx";
+import { live } from "../data/appData.js";
 
 export default function GeospatialMap() {
   const { lang } = useSarthi();
-  const risks = [
+  const risks = live.mapRisks ?? [
     { id: "bayOfBengal", type: "cyclone", x: 75, y: 70, severity: "high", icon: "CloudLightning" },
     { id: "jnptMumbai",   type: "port",    x: 18, y: 65, severity: "medium", icon: "Anchor" },
     { id: "delhiNcr",     type: "heatwave",x: 35, y: 25, severity: "low", icon: "Thermometer" },

@@ -418,3 +418,38 @@ Open `http://localhost:5173` and walk every screen:
 ## Done when
 
 Both checklists pass and `git diff --stat` against the baseline commit shows changes only in: `vite.config.js`, `main.jsx`, `src/data/appData.js`, `src/context/SarthiContext.jsx`, `src/api/*` (new), the two components and eight pages listed above.
+
+## Implementation notes (as built, 2026-10-09)
+
+The git baseline already existed (commits "plan 1" to "plan 10"), so no `git init` was needed. Verified with headless Chrome driven over its debugging port: every screen captured before the change, after it with no backend, and after it against a private backend on a copy of the database; then every action clicked and checked on the backend. Deviations from the text above:
+
+- **`vite.config.js`** reads the backend address from `SARTHI_API_TARGET` (default `http://127.0.0.1:8000`) and applies the same proxy to `vite preview`.
+- **`hydrate()`** returns `false` (backend unreachable), `"same"` or `"updated"`. The context bumps `dataVersion` only on `"updated"`, so polling does not re-render (and re-animate) every chart when nothing changed.
+- **`refreshAfterRun()`** (new, in the context) replaces the fixed `setTimeout(refreshData, 4000)`: after a strategy change or a voice adjustment it refreshes every 3 s until the run those start has finished (up to a minute). A first run after a server start takes longer than 4 s.
+- **Opening the app before the backend is ready**: the context looks again every 15 s while offline, so the screens switch to live data once the first run finishes, without a reload.
+- **`fill()`** replaces every occurrence of a placeholder and does not interpret `$` in values.
+- **Intelligence**: offline, the built-in answer still appears after the original 600 ms. A chat reply that changed the strategy goes through `updateStrategy(null, r.strategy)`; one that only changed data (`refresh`) calls `refreshData()`.
+- **Data Hub Sync** waits for the run it started by listening to `/api/runs/{id}/stream`, instead of a fixed 8 s.
+- **Voice**: after a "PROCURE" command (safety stock raised) the app calls `refreshAfterRun()`.
+- **Replenish "critical" list** filters on `stockoutProb ?? risk`. The backend's `risk` also covers overstock, and with it the list offered to *order more* of overstocked products. For the same reason `skuData.stockoutProb` and `skuMonteCarlo.stockoutProb` are now the chance of running out (they equal `risk` except for ghost and money-pit products).
+- **Replenish transfer button**: shown for the first live suggestion leaving each warehouse, and only if its destination is in the list.
+- **Command Center**: `lastReorder` keeps its original random placeholder offline (the plan had a constant).
+- **Dashboard risk messages** show the backend's sentence (`s.msg`), as planned; the static translations for those keys contain invented figures ("+2.3 day avg delay") that would contradict it.
+- **`sharedContext[*].value`** is always a string on the backend, because the page calls `.toLowerCase()` on it.
+- **Known, left as it was**: the receipt window is opened with `noopener`, for which browsers return no window handle, so the printable receipt was never written in the original app either. The order itself is placed and shown.
+- **Validator**: `check_frontend_wiring` reads the frontend source and fails if a page calls an endpoint the backend does not serve, or reads a `live` field `/api/bootstrap` does not send.
+
+Offline result: 9 of 12 captured screens have text identical to the baseline; the other 3 (two SKU pages, Command) differ only in numbers the original code draws with `Math.random()`.
+
+## Follow-up: closing the loop (2026-10-10)
+
+After the wiring, every click reached the database but the screens did not change, because they show the latest pipeline run and nothing the manager clicked started a new one. Verified by `tests/api/test_live_loop.py` (8 tests) and by clicking through the real pages in headless Chrome.
+
+- **Actions re-run the agents.** An order, a transfer, or an approval that moves stock schedules a pipeline run one second later (several clicks in a row share one run). The response carries `runStarted`, and the page then refreshes until that run's results are in. Approving a count or a cap, dismissing, and launching a campaign change nothing the agents would see, so they start no run. Switch off with `SARTHI_RERUN_AFTER_ACTION=false`.
+- **Decisions carry over between runs** (`execution_engine.already_decided`). A dismissed recommendation is not raised again for `SARTHI_DECISION_MEMORY_DAYS` (7) while the product stays in the same zone. An approved check or campaign is not repeated. An approved order or transfer changed the stock, so anything the agents still propose for that product afterwards is a new recommendation.
+- **The Alerts list keeps approvals** from earlier runs for 24 hours, and reorder requests made in chat move to each new run until they are decided.
+- **The audit trail spans runs**: the 30 most recent actions, not only the latest run's.
+- **Data Hub Sync** is available whenever the backend is connected (it re-runs the agents on the data already stored). Offline it still waits for all eight simulated uploads.
+- **Receipt.** The receipt tab is opened when Proceed is clicked and filled once the order is placed. It was opened with `noopener` before, for which browsers return no window to write into, so it stayed blank.
+- **Command Center Export CSV** downloads the table as shown (same filter and sort).
+- **Still not wired**, because they never did anything in the original design and need a decision on what they should do: Bulk Actions, the per-row action button, Prev/Next and the "Showing 15 of 847" text on the Command Center, and the four headline numbers on the landing page.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from "recharts";
-import { skuData, zoneInfo } from "../data/appData.js";
+import { skuData, zoneInfo, live } from "../data/appData.js";
 import { i18n } from "../data/i18n.js";
 import { useSarthi } from "../context/SarthiContext.jsx";
 import { C } from "../theme.js";
@@ -117,7 +117,7 @@ function Inventory({ setPage, setSku }) {
         </div>
         {/* SKU zone strips */}
         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-          {driftData.map(sku => {
+          {(live.drift?.data ?? driftData).map(sku => {
             const currentZone = sku.zones[driftDay];
             const prevZone = driftDay > 0 ? sku.zones[driftDay - 1] : currentZone;
             const migrated = currentZone !== prevZone;

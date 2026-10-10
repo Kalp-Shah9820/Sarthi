@@ -7,7 +7,7 @@ Executing the same alert twice returns the first result and changes nothing.
 
 import json
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, timedelta
 from email.message import EmailMessage
 
 from sqlmodel import func, select
@@ -149,6 +149,45 @@ def _campaign(payload: dict) -> tuple[str, str]:
         return f"CMP-{campaign.id}", f"{payload['type'].title()} campaign live at {campaign.discount_pct:.0f}% off"
 
 
+def recent_decisions(days: int) -> dict[str, Alert]:
+    """The manager's latest decision per recommendation (keyed by proposal id) within the last `days`."""
+    cutoff = utcnow() - timedelta(days=days)
+    with session() as s:
+        decided = s.exec(select(Alert).where(Alert.status.in_(("approved", "dismissed")), Alert.decided_at.is_not(None))
+                         .order_by(Alert.decided_at)).all()
+    recent = [a for a in decided if (a.decided_at if a.decided_at.tzinfo else a.decided_at.replace(tzinfo=UTC)) >= cutoff]
+    return {a.payload["proposal_id"]: a for a in recent if a.payload.get("proposal_id")}
+
+
+def already_decided(proposal: dict, zone: str, decisions: dict[str, Alert]) -> str | None:
+    """Why this recommendation should not be raised again, or None.
+
+    A dismissed recommendation stays dismissed while the product is in the same zone. An approved check
+    or campaign is not repeated. An approved order or transfer changed the stock, so whatever the agents
+    still propose afterwards is a new recommendation.
+    """
+    prior = decisions.get(proposal["id"])
+    if prior is None:
+        return None
+    if prior.status == "dismissed" and prior.zone == zone:
+        return "dismissed"
+    if prior.status == "approved" and proposal["kind"] in ("audit", "campaign"):
+        return "approved"
+    return None
+
+
+def carry_open_requests(run_id: int) -> int:
+    """Reorder requests the manager made in chat stay on the Alerts list until decided: move them to this run."""
+    with session() as s:
+        moved = [a for a in s.exec(select(Alert).where(Alert.status == "open", Alert.run_id != run_id)).all()
+                 if a.payload.get("source") == "chat"]
+        for alert in moved:
+            alert.run_id = run_id
+            s.add(alert)
+        s.commit()
+    return len(moved)
+
+
 def execute_payload(kind: str, payload: dict, *, sku_id: str, run_id: int, source: str = "user") -> dict:
     """Carry out one action and log it. Returns {"txid", "kind"}."""
     if kind == "purchase":
@@ -194,11 +233,16 @@ class ExecutionEngine(Agent):
             return {"alerts": [], "executed": []}
         lang = state.get("lang", "EN")
         decisions = state.get("decisions", {})
-        alert_ids, executed = [], []
+        alert_ids, executed, held = [], [], 0
+        decided = recent_decisions(self.settings.decision_memory_days)
+        carry_open_requests(self.bb.run_id)
         for ruling in state.get("rulings", []):
             if ruling.get("status") != "approved":
                 continue
             p = ruling["proposal"]
+            if already_decided(p, decisions.get(p["sku_id"], {}).get("zone", p.get("zone", "sweet")), decided):
+                held += 1               # the manager has ruled on this one; do not ask again
+                continue
             facts = p["facts"]
             wording = templates.render("alert", p["alert_type"], lang, **facts)
             msg = wording["msg"]
@@ -229,6 +273,7 @@ class ExecutionEngine(Agent):
                 result = execute_alert(alert_id, source="auto")
                 executed.append(result["txid"])
                 self.bb.say(self.key, wording["action"], stance="execute", phase=self.phase, sku_id=p["sku_id"], txid=result["txid"])
-        self.bb.act(self.key, self.phase, f"Raised {len(alert_ids)} alerts", result=f"{len(executed)} executed automatically",
-                    alerts=len(alert_ids), executed=len(executed))
+        result = f"{len(executed)} executed automatically" + (f", {held} already decided and not repeated" if held else "")
+        self.bb.act(self.key, self.phase, f"Raised {len(alert_ids)} alerts", result=result,
+                    alerts=len(alert_ids), executed=len(executed), held=held)
         return {"alerts": alert_ids, "executed": executed}

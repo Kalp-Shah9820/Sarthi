@@ -10,6 +10,7 @@ from sarthi.agents import debate as debate_lines
 from sarthi.agents.execution_engine import execute_payload
 from sarthi.analytics import esg, policy
 from sarthi.api import presenters
+from sarthi.api.routers import runs
 from sarthi.blackboard.store import Blackboard
 from sarthi.config import get_settings
 from sarthi.db import session
@@ -117,7 +118,7 @@ def create_order(body: OrderIn) -> dict:
 
     result = execute_payload("purchase", {**proposal["payload"], "eta_days": eta}, sku_id=sku.id, run_id=run_id, source="user")
     presenters.bump()
-    return {"orderId": result["txid"], "expectedDelivery": f"{eta}–{eta + 1} days"}
+    return {"orderId": result["txid"], "expectedDelivery": f"{eta}–{eta + 1} days", "runStarted": runs.rerun_after_action()}
 
 
 @router.post("/transfers")
@@ -137,7 +138,7 @@ def create_transfer(body: TransferIn) -> dict:
     with session() as s:
         moved = s.get(TransferOrder, result["txid"]).qty
     presenters.bump()
-    return {"transferId": result["txid"], "units": moved}
+    return {"transferId": result["txid"], "units": moved, "runStarted": runs.rerun_after_action()}
 
 
 @router.post("/campaigns")

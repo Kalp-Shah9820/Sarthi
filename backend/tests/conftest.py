@@ -22,6 +22,7 @@ def isolated_settings(tmp_path_factory):
         "SARTHI_WEATHER_ENABLED": "false",
         "SARTHI_MC_PATHS": "800",
         "SARTHI_SKIP_STARTUP_RUN": "true",
+        "SARTHI_RERUN_AFTER_ACTION": "false",     # tests that want the follow-up run switch it on themselves
     }
     previous = {k: os.environ.get(k) for k in env}
     os.environ.update(env)

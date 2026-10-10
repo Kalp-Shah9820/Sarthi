@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     # decision constants (overridable by the active strategy policy)
     review_period_days: int = 7
+    rerun_after_action: bool = True      # an order, transfer or approval re-runs the agents so the screens reflect it
+    decision_memory_days: int = 7        # a recommendation the manager dismissed is not raised again for this long
     stockout_alert_prob: float = 0.15      # PDF: alert when P(stockout) > 15 %
     critical_prob: float = 0.60            # UI: "critical" above 60 %
     overstock_cover_days: int = 30         # PDF: Ghost when days of cover > 30

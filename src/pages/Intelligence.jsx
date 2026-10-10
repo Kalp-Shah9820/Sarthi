@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { cannibalization, distributors, mbaRules, skuData } from "../data/appData.js";
+import { cannibalization, distributors, live, mbaRules, skuData } from "../data/appData.js";
+import { api, fill } from "../api/client.js";
 import { C } from "../theme.js";
 import { SectionLabel, Tag, SarthiIcon } from "../components/ui.jsx";
 import { useSarthi } from "../context/SarthiContext.jsx";
@@ -18,7 +19,7 @@ const sharedContext = [
 ];
 
 function Intelligence() {
-  const { strategy, updateStrategy, lang } = useSarthi();
+  const { strategy, updateStrategy, lang, refreshData } = useSarthi();
   const [query, setQuery] = useState("");
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
@@ -71,12 +72,8 @@ function Intelligence() {
     { ts:"14:25:00", agentKey:"rlhfArbiter", key: 6, params: { sku: i18n[lang].sku002 } },
   ];
 
-  const ask = () => {
-    if(!query.trim()) return;
-    const userMsg = { role:"user", text:query };
-    setChat(prev => [...prev, userMsg]);
-
-    setTimeout(() => {
+  // the built-in answers, used when the backend cannot be reached
+  const localAnswer = (query) => {
       let response = "";
       const q = query.toLowerCase();
       const lq = query.toLowerCase(); // Added for the instruction's use of lq
@@ -144,9 +141,25 @@ function Intelligence() {
         response = i18n[lang].intelDefaultPrompt;
       }
 
-      setChat(prev => [...prev, { role:"bot", text:response }]);
-    }, 600);
+      return response;
+  };
+
+  const ask = async () => {
+    if(!query.trim()) return;
+    const text = query;
+    setChat(prev => [...prev, { role:"user", text }]);
     setQuery("");
+    const r = await api.post("/chat", { text, lang });
+    let response;
+    if (r) {
+      response = r.key ? fill(i18n[lang][r.key], r.params) : r.text;
+      if (r.strategy) updateStrategy(null, r.strategy);        // already applied by the backend; adopt it and wait for its run
+      else if (r.refresh) refreshData();
+    } else {
+      await new Promise(done => setTimeout(done, 600));
+      response = localAnswer(text);
+    }
+    setChat(prev => [...prev, { role:"bot", text:response }]);
   };
 
   return (
@@ -215,10 +228,10 @@ function Intelligence() {
             <div style={{ fontFamily:"'Inter'", fontSize:12, color:C.muted, marginBottom:12, fontWeight:300 }}>
               {i18n[lang].xaiAuditDesc}
             </div>
-            {auditTrailData.map((entry, i) => {
+            {(live.auditTrail ?? auditTrailData).map((entry, i) => {
               const action = i18n[lang][`auditTrail_${entry.key}_action`] || "";
-              const result = i18n[lang][`auditTrail_${entry.key}_result`] || "";
-              const finalAction = Object.entries(entry.params).reduce((str, [k, v]) => str.replace(`{${k}}`, v), action);
+              const result = entry.result ?? (i18n[lang][`auditTrail_${entry.key}_result`] || "");
+              const finalAction = entry.text ?? Object.entries(entry.params).reduce((str, [k, v]) => str.replace(`{${k}}`, v), action);
               return (
                 <div key={i} style={{ borderLeft:`2px solid ${C.accent}44`, paddingLeft:12, marginBottom:12 }}>
                   <div style={{ fontFamily:"'DM Mono'", fontSize:11, color:C.accent, marginBottom:3 }}>{entry.ts} · {i18n[lang][entry.agentKey] || entry.agentKey}</div>
@@ -235,7 +248,7 @@ function Intelligence() {
             <div style={{ fontFamily:"'Inter'", fontSize:11, color:C.muted, marginBottom:10, fontWeight:300 }}>
               {i18n[lang].sharedContextDesc}
             </div>
-            {sharedContext.map((ctx, i) => (
+            {(live.sharedContext ?? sharedContext).map((ctx, i) => (
               <div key={i} style={{
                 display:"flex", justifyContent:"space-between", alignItems:"center",
                 padding:"6px 0", borderBottom:`1px solid ${C.border}22`
@@ -245,8 +258,8 @@ function Intelligence() {
                   <div style={{ fontFamily:"'DM Mono'", fontSize:10, color:C.muted }}>{i18n[lang][ctx.agentKey] || ctx.agentKey} · {ctx.updated}</div>
                 </div>
                 <span style={{
-                  fontFamily:"'DM Mono'", fontSize:11, fontWeight:600, color:ctx.color,
-                  background:ctx.color+"18", borderRadius:4, padding:"2px 8px"
+                  fontFamily:"'DM Mono'", fontSize:11, fontWeight:600, color:(ctx.color ?? C[ctx.tone] ?? C.ghost),
+                  background:(ctx.color ?? C[ctx.tone] ?? C.ghost)+"18", borderRadius:4, padding:"2px 8px"
                 }}>{i18n[lang][ctx.value.toLowerCase()] || ctx.value}</span>
               </div>
             ))}

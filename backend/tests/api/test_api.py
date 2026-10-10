@@ -137,7 +137,8 @@ def test_bootstrap_matches_the_frontend_contract(client):
         assert all(isinstance(v, int) for v in row["forecast"] + row["sales"])
         assert all(isinstance(row[k], int) for k in ("vel", "stock", "safetyStock", "reorderPoint", "par", "risk", "margin",
                                                      "lead", "daysStock", "recommendedQty"))
-        assert row["zone"] in ZONES and 0 <= row["risk"] <= 100 and row["stockoutProb"] == row["risk"]
+        assert row["zone"] in ZONES and 0 <= row["risk"] <= 100 and 0 <= row["stockoutProb"] <= row["risk"]
+        assert row["stockoutProb"] == row["risk"] or row["zone"] in ("ghost", "money")      # they differ only for overstock
         assert row["decisionStatus"] in ("critical", "pending", "auto")
         assert isinstance(row["co2"], str) and float(row["co2"]) >= 0
         assert row["supplier"] and row["tier"] in ("Gold", "Silver", "Bronze")
@@ -178,7 +179,7 @@ def test_bootstrap_live_section(client):
     assert all(d["zones"][-1] == today[d["id"]] for d in live["drift"]["data"])     # the last day is today
 
     assert live["alerts"] and all(set(a) == ALERT_FIELDS for a in live["alerts"])
-    assert 0 < len(live["auditTrail"]) <= 12 and all(set(x) == {"ts", "agentKey", "text", "result"} for x in live["auditTrail"])
+    assert 0 < len(live["auditTrail"]) <= 30 and all(set(x) == {"ts", "agentKey", "text", "result"} for x in live["auditTrail"])
     assert live["sharedContext"] and all(c["key"] != "phase" and c["tone"] in ZONES for c in live["sharedContext"])
     assert live["debate"] and all(set(x) == {"agentKey", "tone", "msg"} and x["tone"] in ZONES for x in live["debate"])
 
@@ -269,7 +270,7 @@ def test_approve_executes_once_and_learns_once(client):
     assert bandit.get_arm(arm) == (alpha + 1, beta)
 
     again = client.post(f"/api/alerts/{alert.id}/approve", json={"feedback": "good"})
-    assert again.json() == {"txid": txid, "status": "approved"}
+    assert again.json() == {"txid": txid, "status": "approved", "runStarted": False}
     assert bandit.get_arm(arm) == (alpha + 1, beta)                 # exactly one update
     if alert.payload.get("kind") == "transfer":
         assert count(TransferOrder, TransferOrder.id == txid) == 1
@@ -546,3 +547,35 @@ def test_model_may_classify_feedback_but_never_author_it(client):
     assert (capped.directive, capped.value, capped.note) == ("other", None, "that is far too many for us")
     kept = asyncio.run(learn("we never want over 250 of these", PreferenceOut(scope="sku", directive="cap_qty", value=250.0, note="x")))
     assert (kept.directive, kept.value, kept.target, kept.note) == ("cap_qty", 250.0, alert.sku_id, "we never want over 250 of these")
+
+
+# ── the frontend's side of the contract ──────────────────────────────────────
+
+def test_validator_frontend_wiring_check(client, tmp_path):
+    from sarthi import validate
+
+    result = validate.check_frontend_wiring()
+    assert result.status == validate.PASS, result.detail
+
+    def frontend(page: str):
+        """A minimal frontend tree whose one page is `page`."""
+        root = tmp_path / str(len(list(tmp_path.iterdir())))
+        (root / "src" / "api").mkdir(parents=True)
+        (root / "src" / "data").mkdir()
+        (root / "src" / "pages").mkdir()
+        (root / "vite.config.js").write_text("export default { server: { proxy: { '/api': {} } } }", encoding="utf-8")
+        (root / "src" / "api" / "client.js").write_text("export const api = {}", encoding="utf-8")
+        (root / "src" / "api" / "hydrate.js").write_text("const x = b.skuData && b.live;", encoding="utf-8")
+        (root / "src" / "data" / "appData.js").write_text("const live = { online: false };", encoding="utf-8")
+        (root / "src" / "pages" / "Page.jsx").write_text(page, encoding="utf-8")
+        return validate.check_frontend_wiring(root)
+
+    good = frontend("api.post(`/alerts/${a.id}/approve`, {}); api.stream(`/sandbox/debate/stream?lead=${lead}`); const n = live.alerts ?? [];")
+    assert good.status == validate.PASS, good.detail
+    gone = frontend('api.post("/payments", {});')
+    assert gone.status == validate.FAIL and "POST /api/payments" in gone.detail
+    wrong_method = frontend('api.put("/orders", {});')
+    assert wrong_method.status == validate.FAIL and "PUT /api/orders" in wrong_method.detail
+    unknown_field = frontend('api.get("/health"); const x = live.weatherRadar;')
+    assert unknown_field.status == validate.FAIL and "live.weatherRadar" in unknown_field.detail
+    assert validate.check_frontend_wiring(tmp_path / "nowhere").status == validate.WARN
