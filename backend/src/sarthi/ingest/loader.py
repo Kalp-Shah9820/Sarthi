@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import delete, insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlmodel import Session, func, select
+from sqlmodel import Session, col, func, select
 
 from sarthi.config import get_settings
 from sarthi.db import get_engine, session
@@ -122,9 +122,10 @@ def _given(value) -> bool:
 
 def _write_sku(s: Session, df: pd.DataFrame) -> int:
     for row in df.to_dict("records"):
-        sku = s.get(Sku, row["sku_id"])
-        new = sku is None
-        if new:
+        found = s.get(Sku, row["sku_id"])
+        new = found is None
+        sku = found
+        if sku is None:
             sku = Sku(id=row["sku_id"], name=row["name"] or row["sku_id"], category=row["category"],
                       cogs=float(row["unit_cost"]), price=round(float(row["unit_cost"]) * 1.25, 2))
         sku.name = row["name"] or sku.name
@@ -163,17 +164,17 @@ def _write_sales(s: Session, df: pd.DataFrame) -> int:
     keys = list(zip(df["basket_id"], df["sku_id"], strict=True))
     fresh = df[[key not in existing for key in keys]].drop_duplicates(subset=["basket_id", "sku_id"])
     rows = [
-        {"day": r.date, "sku_id": r.sku_id, "location_id": r.location_id, "qty": int(r.qty),
-         "price": float(r.price), "basket_id": r.basket_id}
-        for r in fresh.itertuples()
+        {"day": r["date"], "sku_id": r["sku_id"], "location_id": r["location_id"], "qty": int(r["qty"]),
+         "price": float(r["price"]), "basket_id": r["basket_id"]}
+        for r in fresh.to_dict("records")
     ]
     for start in range(0, len(rows), CHUNK * 10):
-        s.connection().execute(insert(Sale.__table__), rows[start:start + CHUNK * 10])
+        s.connection().execute(insert(Sale), rows[start:start + CHUNK * 10])
     return len(rows)
 
 
 def _primary_supplier(s: Session, sku_id: str) -> str | None:
-    link = s.exec(select(SkuSupplier).where(SkuSupplier.sku_id == sku_id).order_by(SkuSupplier.is_primary.desc())).first()
+    link = s.exec(select(SkuSupplier).where(col(SkuSupplier.sku_id) == sku_id).order_by(col(SkuSupplier.is_primary).desc())).first()
     if link:
         return link.supplier_id
     return s.exec(select(Supplier.id)).first()
@@ -181,11 +182,11 @@ def _primary_supplier(s: Session, sku_id: str) -> str | None:
 
 def _write_stock(s: Session, df: pd.DataFrame, problems: list[str]) -> int:
     rows = [
-        {"day": r.date, "sku_id": r.sku_id, "location_id": r.warehouse_id, "on_hand": int(r.current_stock)}
-        for r in df.itertuples()
+        {"day": r["date"], "sku_id": r["sku_id"], "location_id": r["warehouse_id"], "on_hand": int(r["current_stock"])}
+        for r in df.to_dict("records")
     ]
     for start in range(0, len(rows), CHUNK):
-        stmt = sqlite_insert(StockDaily.__table__).values(rows[start:start + CHUNK])
+        stmt = sqlite_insert(StockDaily).values(rows[start:start + CHUNK])
         s.connection().execute(stmt.on_conflict_do_update(
             index_elements=["day", "sku_id", "location_id"], set_={"on_hand": stmt.excluded.on_hand}
         ))
@@ -193,7 +194,7 @@ def _write_stock(s: Session, df: pd.DataFrame, problems: list[str]) -> int:
     for r in df[df["date"] == df["date"].max()].itertuples():
         open_rows = s.exec(
             select(Inbound).where(Inbound.sku_id == r.sku_id, Inbound.location_id == r.warehouse_id,
-                                  Inbound.received_on.is_(None))
+                                  col(Inbound.received_on).is_(None))
         ).all()
         if sum(i.qty for i in open_rows) == r.transit:
             continue
@@ -248,13 +249,14 @@ def _write_forecast(s: Session, df: pd.DataFrame) -> int:
 
 def _write_risk(s: Session, df: pd.DataFrame) -> int:
     """The file is the current set of uploaded signals: it replaces earlier uploads, never feeds or weather."""
-    s.connection().execute(delete(RiskSignal).where(RiskSignal.source == "upload"))
+    s.connection().execute(delete(RiskSignal).where(col(RiskSignal.source) == "upload"))
     regions = {key.lower(): key for key in cat.REGIONS}
-    for r in df.itertuples():
+    for r in df.to_dict("records"):
+        region = str(r["region"])
         s.add(RiskSignal(
-            type=r.type, severity=r.severity, region_key=regions.get(r.region.lower(), r.region), msg=r.message,
-            icon=RISK_ICONS[r.type], lead_modifier=float(r.lead_modifier), demand_multiplier=float(r.demand_multiplier),
-            skus_at_risk=int(r.skus_at_risk), source="upload", active=True,
+            type=str(r["type"]), severity=str(r["severity"]), region_key=regions.get(region.lower(), region), msg=str(r["message"]),
+            icon=RISK_ICONS[str(r["type"])], lead_modifier=float(r["lead_modifier"]),
+            demand_multiplier=float(r["demand_multiplier"]), skus_at_risk=int(r["skus_at_risk"]), source="upload", active=True,
         ))
     return len(df)
 
@@ -279,9 +281,11 @@ def _write_locations(s: Session, df: pd.DataFrame) -> int:
 
 
 def _write_esg(s: Session, df: pd.DataFrame) -> int:
-    for r in df.itertuples():
-        sup = s.get(Supplier, r.supplier_id)
-        sup.esg_score = esg_score_from_carbon(float(r.carbon_kg))
+    for r in df.to_dict("records"):
+        sup = s.get(Supplier, r["supplier_id"])
+        if sup is None:                # validated against the catalogue before writing; skip if it vanished
+            continue
+        sup.esg_score = esg_score_from_carbon(float(r["carbon_kg"]))
         s.add(sup)
     return len(df)
 
@@ -346,9 +350,9 @@ def data_health() -> dict[str, str]:
         sales = count(Sale)
         joined = s.exec(
             select(func.count()).select_from(Sale)
-            .where(Sale.sku_id.in_(select(Sku.id)), Sale.location_id.in_(select(Location.id)))
+            .where(col(Sale.sku_id).in_(select(col(Sku.id))), col(Sale.location_id).in_(select(col(Location.id))))
         ).one()
-        latest_run = s.exec(select(func.max(Run.id)).where(Run.dry_run.is_(False))).one()
+        latest_run = s.exec(select(func.max(col(Run.id))).where(col(Run.dry_run).is_(False))).one()
         alerts = 0
         if latest_run is not None:
             alerts = s.exec(

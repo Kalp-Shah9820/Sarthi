@@ -1,9 +1,12 @@
 """Stock redistribution between sites: a transportation linear programme."""
 
 import math
+from collections.abc import Mapping
 
 import numpy as np
 from scipy.optimize import linprog
+
+from sarthi.analytics.solver import solve
 
 MIN_MOVE_UNITS = 10
 COST_FIXED = 2.0        # rupees per unit, handling
@@ -34,9 +37,9 @@ def site_needs(on_hand: dict[str, float], capacity: dict[str, float], safety_sto
     return surplus, deficit
 
 
-def plan_transfers(surplus: dict[str, float], deficit: dict[str, float],
-                   cost: dict[tuple[str, str], float], value: dict[str, float],
-                   source_value: dict[str, float] | None = None) -> list[dict]:
+def plan_transfers(surplus: Mapping[str, float], deficit: Mapping[str, float],
+                   cost: Mapping[tuple[str, str], float], value: Mapping[str, float],
+                   source_value: Mapping[str, float] | None = None) -> list[dict]:
     """Cheapest set of moves from surplus sites to deficit sites; a move happens only if it pays for itself.
 
     `value[j]` is the per-unit benefit of filling site j's deficit (e.g. purchase cost avoided).
@@ -57,7 +60,7 @@ def plan_transfers(surplus: dict[str, float], deficit: dict[str, float],
     for site in sinks:
         rows.append([1.0 if j == site else 0.0 for _, j in pairs])
         limits.append(deficit[site])
-    res = linprog(c, A_ub=np.array(rows), b_ub=np.array(limits), bounds=(0, None), method="highs")
+    res = solve(linprog, c, A_ub=np.array(rows), b_ub=np.array(limits), bounds=(0, None), method="highs")
     if not res.success:
         return []
     moves = []

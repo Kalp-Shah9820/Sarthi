@@ -2,7 +2,7 @@
 
 import re
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel
 from sqlmodel import select
@@ -18,7 +18,8 @@ PRESETS = {   # identical to the values the UI sets today
     "Cash Flow": {"savingsPriority": 0.9, "safetyStockMultiplier": 0.8, "leadTimeBuffer": 1.2},
     "Growth": {"savingsPriority": 0.2, "safetyStockMultiplier": 1.5, "leadTimeBuffer": 1.5},
 }
-MODE_WORDS = (      # checked in this order: "cash flow over growth" is Cash Flow
+StrategyMode = Literal["Balanced", "Cash Flow", "Growth"]
+MODE_WORDS: tuple[tuple[StrategyMode, tuple[str, ...]], ...] = (      # checked in this order: "cash flow over growth" is Cash Flow
     ("Cash Flow", ("cash", "saving", "कैश", "बचत", "नकदी")),
     ("Growth", ("growth", "aggressive", "विकास", "ग्रोथ")),
     ("Balanced", ("balanced", "balance", "normal", "reset", "default", "संतुलित", "सामान्य")),
@@ -31,11 +32,11 @@ DEFAULT_SAFETY_PCT, MAX_SAFETY_PCT = 20.0, 100.0
 
 
 class PolicyOut(BaseModel):
-    mode: Literal["Balanced", "Cash Flow", "Growth"]
+    mode: StrategyMode
     horizon_days: int = DEFAULT_HORIZON
 
 
-def mode_from_words(text: str) -> str | None:
+def mode_from_words(text: str) -> StrategyMode | None:
     low = text.lower()
     return next((mode for mode, words in MODE_WORDS if any(w in low for w in words)), None)
 
@@ -55,7 +56,7 @@ async def compile_policy(text: str, llm=None, hint: str = "") -> PolicyOut | Non
     `hint` is a mode already extracted from the sentence. Returns None when no mode can be told.
     """
     horizon = horizon_from_words(text)
-    mode = mode_from_words(text) or (hint if hint in PRESETS else None)
+    mode = mode_from_words(text) or (cast(StrategyMode, hint) if hint in PRESETS else None)
     if mode is None:
         llm = llm or get_llm()
         guess = await llm.json(PolicyOut, prompts.COMPILE_STRATEGY, text, fallback=lambda: None, task="strategy",

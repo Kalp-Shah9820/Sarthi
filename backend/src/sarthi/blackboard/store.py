@@ -9,7 +9,7 @@ import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy import delete
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.db import session
 from sarthi.models import Event
@@ -71,7 +71,7 @@ def write_event(run_id: int, *, kind: str, agent: str = "", phase: str = "", key
 
 def delete_run_events(run_id: int) -> None:
     with session() as s:
-        s.connection().execute(delete(Event).where(Event.run_id == run_id))
+        s.connection().execute(delete(Event).where(col(Event.run_id) == run_id))
         s.commit()
 
 
@@ -111,17 +111,17 @@ class Blackboard:
 
     def events(self, kind: str | None = None, since_id: int = 0) -> list[Event]:
         with session() as s:
-            query = select(Event).where(Event.run_id == self.run_id, Event.id > since_id)
+            query = select(Event).where(col(Event.run_id) == self.run_id, col(Event.id) > since_id)
             if kind is not None:
                 query = query.where(Event.kind == kind)
-            return list(s.exec(query.order_by(Event.id)).all())
+            return list(s.exec(query.order_by(col(Event.id))).all())
 
     def get(self, key: str, default=None):
         """Latest shared fact for `key` in this run."""
         with session() as s:
             event = s.exec(
                 select(Event).where(Event.run_id == self.run_id, Event.kind == "context", Event.key == key)
-                .order_by(Event.id.desc())
+                .order_by(col(Event.id).desc())
             ).first()
         return event.value.get("v", default) if event else default
 
@@ -129,8 +129,9 @@ class Blackboard:
         """Latest value per key, newest first."""
         latest: dict[str, Event] = {}
         for event in self.events(kind="context"):
-            latest[event.key] = event
-        ordered = sorted(latest.values(), key=lambda e: e.id, reverse=True)
+            if event.key is not None:
+                latest[event.key] = event
+        ordered = sorted(latest.values(), key=lambda e: e.id or 0, reverse=True)
         return [
             {"key": e.key, "value": e.value.get("v"), "tone": e.value.get("tone", "ghost"), "agent": e.agent, "ts": e.ts}
             for e in ordered

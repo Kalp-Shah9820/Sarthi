@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     weather_enabled: bool = True
     skip_startup_run: bool = False       # the server normally runs the pipeline once when it starts with data but no run
     mc_paths: int = 2000
+    forecast_jobs: int = 1               # processes fitting forecasts at once; 0 = one per product. More did not help on a
+                                         # 16-thread laptop (22 s either way: starting the workers costs what they save)
     seed: int = 20261005
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

@@ -5,6 +5,7 @@ from sarthi import validate
 from sarthi.api.main import create_app
 from sarthi.cli import app as cli_app
 from sarthi.config import BACKEND_ROOT, Settings, get_settings
+from tests.conftest import settings_without_env_file
 
 
 def test_health_endpoint():
@@ -22,7 +23,7 @@ def test_cors_allows_vite_dev_origin():
 
 def test_settings_defaults_and_paths(monkeypatch):
     monkeypatch.delenv("SARTHI_DB_PATH", raising=False)  # conftest points tests at a temporary database
-    s = Settings(_env_file=None)
+    s = settings_without_env_file()
     assert s.llm_base_url == "http://localhost:1234/v1"
     assert s.llm_reasoning_headroom == 0
     assert s.db_file == BACKEND_ROOT / "data" / "sarthi.db"
@@ -32,7 +33,7 @@ def test_settings_defaults_and_paths(monkeypatch):
 def test_settings_read_env_prefix(monkeypatch):
     monkeypatch.setenv("SARTHI_MC_PATHS", "500")
     monkeypatch.setenv("SARTHI_LLM_ENABLED", "false")
-    s = Settings(_env_file=None)
+    s = settings_without_env_file()
     assert s.mc_paths == 500
     assert s.llm_enabled is False
 

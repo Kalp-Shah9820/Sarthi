@@ -15,7 +15,7 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 
 | Part | State |
 |---|---|
-| Frontend (React) | Complete. All screens work, currently on built-in sample data. |
+| Frontend (React) | Complete. All screens work, on live data when the backend runs and on built-in sample data when it does not. |
 | Backend milestone 1: project setup | Done. The server starts and answers a health check. |
 | Backend milestone 2: database and demo data | Done. 18 months of sales, stock and delivery history for the 10 demo products. |
 | Backend milestone 3: file ingestion | Done. The 8 Data Hub file types can be read, checked and stored (from code; the upload button is connected in milestone 9). |
@@ -27,6 +27,7 @@ The project is being built in twelve milestones, described in [plan/](plan/READM
 | Backend milestone 9: HTTP API | Done. One endpoint returns every screen's data in the shapes the screens already use; others carry out the buttons' actions (approve, dismiss, order, transfer, campaign, upload, what-if) and stream agent activity live. |
 | Backend milestone 10: chat, strategy and voice | Done. Questions are answered from live data, a typed sentence can change the strategy the agents follow, voice commands are understood against the real catalogue, and any product's situation can be explained in a sentence. |
 | Milestone 11: connecting the screens to the backend | Done. Every screen reads from and writes to the backend, with no change to how it looks. With the backend stopped, the screens fall back to their built-in sample data. |
+| Milestone 12: tests, backtest, runbook | Done. A backtest measures the replenishment policy against a naive rule, invariants guard the pipeline, and the day-to-day instructions are in [backend/README.md](backend/README.md). |
 
 The two halves are connected: the screens show what the agents computed from the database, and the buttons (approve, dismiss, order, transfer, launch campaign, upload, sync, chat, voice, what-if) act on the backend.
 
@@ -169,6 +170,7 @@ Individual checks:
 | `uv run sarthi seed` | Resets the database to the demo state |
 | `uv run sarthi run` | Runs the whole agent pipeline once and prints a summary |
 | `uv run sarthi run --dry --lead-mult 2` | A what-if (here: lead times doubled); stores no alerts and executes nothing |
+| `uv run sarthi backtest` | Replays the last 120 days under Sarthi's policy and a naive reorder rule, and checks the risk figures against what happened |
 | `uv run sarthi export-samples` | Writes the 8 example upload files into `backend/samples` |
 | `uv run sarthi version` | Prints the backend version |
 
@@ -187,7 +189,7 @@ Individual checks:
 | Screens show the built-in sample numbers | The backend is not running, or its first analysis run has not finished (about a minute after the very first start). The screens switch to live data by themselves within 15 seconds of it being ready. |
 | Screens show nothing after a backend change | Open the browser console (F12). `uv run sarthi validate` includes a `frontend wiring` check that names any screen asking for something the backend does not serve. |
 
-## How the finished system will work
+## How the system works
 
 Seven agents run in four phases, matching the pipeline bar at the top of each screen:
 

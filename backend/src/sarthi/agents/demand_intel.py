@@ -3,7 +3,7 @@
 import asyncio
 
 import pandas as pd
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from sarthi.agents.base import Agent
 from sarthi.analytics import anomaly, basket, bullwhip, cannibal, data
@@ -35,7 +35,8 @@ def analyse(settings) -> dict:
     sales, stock = data.store_frames()
     with session() as s:
         skus = s.exec(select(Sku)).all()
-        receipt_days = set(s.exec(select(Inbound.sku_id, Inbound.received_on).where(Inbound.received_on.is_not(None))).all())
+        received = s.exec(select(col(Inbound.sku_id), col(Inbound.received_on)).where(col(Inbound.received_on).is_not(None))).all()
+    receipt_days = {(sku_id, day) for sku_id, day in received if day is not None}
     names = {k.id: k.name for k in skus}
     categories = {k.id: k.category for k in skus}
     aisles = {k.id: k.aisle_id for k in skus}

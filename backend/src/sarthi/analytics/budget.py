@@ -3,6 +3,8 @@
 import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, milp
 
+from sarthi.analytics.solver import solve
+
 
 def greedy_by_ratio(values: np.ndarray, costs: np.ndarray, budget: float) -> np.ndarray:
     chosen = np.zeros(len(values), dtype=int)
@@ -22,8 +24,8 @@ def fund_orders(values: np.ndarray, costs: np.ndarray, budget: float) -> np.ndar
         return np.zeros(0, dtype=int)
     if budget <= 0:
         return np.zeros(len(values), dtype=int)
-    res = milp(c=-values, constraints=LinearConstraint(costs.reshape(1, -1), ub=[budget]),
-               integrality=np.ones(len(values)), bounds=Bounds(0, 1))
+    res = solve(milp, c=-values, constraints=LinearConstraint(costs.reshape(1, -1), ub=budget),
+                integrality=np.ones(len(values)), bounds=Bounds(0, 1))
     if not res.success or res.x is None:
         return greedy_by_ratio(values, costs, budget)
     chosen = np.round(res.x).astype(int)

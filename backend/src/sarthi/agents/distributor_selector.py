@@ -10,6 +10,7 @@ import math
 
 import numpy as np
 from sqlalchemy import delete
+from sqlmodel import col
 
 from sarthi.agents.base import Agent
 from sarthi.agents.debate import days_text
@@ -105,7 +106,8 @@ class DistributorSelector(Agent):
         shelf_cap = float(np.mean(mu)) * sku["shelf_life_days"] * policy.SHELF_LIFE_SHARE
         qty = policy.order_quantity(mu, inp.k, candidate["lead_days"], self.settings.review_period_days,
                                     decision["service_level"], position, sku["moq"], sku["shelf_life_days"],
-                                    supplier["capacity_limit"] or None, seed)
+                                    supplier["capacity_limit"] or None, seed,
+                                    safety_multiplier=decision.get("safety_multiplier", 1.0))
         if qty <= 0:
             return None
         unit_margin = sku["price"] - sku["cogs"]
@@ -114,7 +116,7 @@ class DistributorSelector(Agent):
         def exposure(mode_days: int) -> tuple[float, float]:
             """Stockout risk and lost margin until an order shipped this way would arrive."""
             eta = max(1, round(candidate["lead_days"] + mode_days - BASE_MODE_DAYS))
-            mc = montecarlo.simulate(inp.on_hand, [*receipts, (eta, float(qty))], inp.mu, inp.k, np.array([float(eta)]),
+            mc = montecarlo.simulate(inp.on_hand, [*montecarlo.arrival_index(receipts), (eta, float(qty))], inp.mu, inp.k, np.array([float(eta)]),
                                      MODE_PATHS, seed, demand_mult=inp.demand_mult)
             return mc.stockout_prob, par.par_shortage(mc.expected_lost_units, unit_margin, self.settings.goodwill_factor)
 
@@ -157,7 +159,7 @@ class DistributorSelector(Agent):
                 if order:
                     chosen = candidate
                     break
-            if chosen is None:
+            if chosen is None or order is None:
                 continue
 
             usual = ctx.primary.get(sku["id"], {})
@@ -201,7 +203,7 @@ class DistributorSelector(Agent):
     async def _draft_emails(self, proposals: list[Proposal], lang: str) -> None:
         """One opening email per purchase, saved as a draft. Replaces drafts left by earlier runs."""
         with session() as s:
-            s.connection().execute(delete(OutboxEmail).where(OutboxEmail.status == "draft"))
+            s.connection().execute(delete(OutboxEmail).where(col(OutboxEmail.status) == "draft"))
             s.commit()
         for p in proposals:
             f = p.facts

@@ -7,7 +7,7 @@ import numpy as np
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import delete
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.analytics import whatif
 from sarthi.api import presenters
@@ -53,7 +53,7 @@ def _forget_finished() -> None:
     """
     with session() as s:
         finished = select(Run.id).where(Run.trigger == TRIGGER, Run.dry_run, Run.status != "running")
-        s.connection().execute(delete(Event).where(Event.run_id.in_(finished)))
+        s.connection().execute(delete(Event).where(col(Event.run_id).in_(finished)))
         s.commit()
 
 

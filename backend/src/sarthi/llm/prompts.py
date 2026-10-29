@@ -54,7 +54,19 @@ COMPILE_STRATEGY = (
 )
 EXTRACT_PREFERENCE = (
     "A store manager approved or dismissed an inventory recommendation and left feedback. "
-    "Turn the feedback into one standing rule. Reply with JSON only."
+    "Turn the feedback into one standing rule. Reply with JSON only.\n"
+    "directive must be exactly one of:\n"
+    "- avoid_supplier: do not buy from a supplier. scope supplier, target = the supplier's name. "
+    "Example: 'their deliveries are always late, drop Metro' -> target 'Metro'.\n"
+    "- prefer_supplier: buy from a supplier whenever possible. scope supplier, target = the supplier's name.\n"
+    "- cap_qty: never order more than a number of units. scope sku, value = that number. "
+    "Example: 'we cannot shelve more than 300' -> value 300.\n"
+    "- min_cover_days: always hold at least a number of days of stock. scope sku, value = days (2 weeks = 14).\n"
+    "- safety_stock_pct: raise the safety stock by a percentage. scope sku, value = the percentage.\n"
+    "- no_auto: the manager wants to approve this kind of action personally every time. scope sku.\n"
+    "- other: anything else, including thanks, agreement ('ok', 'fine', 'good call') or a reason that sets no rule.\n"
+    "Use a number as value only if the manager wrote it. Leave target empty unless a supplier or product is named. "
+    "Put the manager's words in note. When unsure, choose other."
 )
 CLASSIFY_NEWS = (
     "Decide whether the headline describes a risk to retail supply chains in India, and if so classify it. "

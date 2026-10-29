@@ -6,7 +6,7 @@ This is the only analytics module that touches the database; everything else is 
 from datetime import date, timedelta
 
 import pandas as pd
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from sarthi.db import session
 from sarthi.models import Sale, Sku, StockDaily
@@ -21,12 +21,12 @@ def store_frames(location_id: str = STORE_ID, as_of: date | None = None) -> tupl
     record are NaN ("unknown"), which is deliberately not the same as zero stock.
     """
     with session() as s:
-        sale_q = select(Sale.sku_id, Sale.day, func.sum(Sale.qty)).where(Sale.location_id == location_id)
-        stock_q = select(StockDaily.sku_id, StockDaily.day, StockDaily.on_hand).where(StockDaily.location_id == location_id)
+        sale_q = select(col(Sale.sku_id), col(Sale.day), func.sum(Sale.qty)).where(Sale.location_id == location_id)
+        stock_q = select(col(StockDaily.sku_id), col(StockDaily.day), col(StockDaily.on_hand)).where(StockDaily.location_id == location_id)
         if as_of is not None:
             sale_q = sale_q.where(Sale.day <= as_of)
             stock_q = stock_q.where(StockDaily.day <= as_of)
-        sales = pd.DataFrame(s.exec(sale_q.group_by(Sale.sku_id, Sale.day)).all(), columns=["sku_id", "day", "qty"])
+        sales = pd.DataFrame(s.exec(sale_q.group_by(col(Sale.sku_id), col(Sale.day))).all(), columns=["sku_id", "day", "qty"])
         stock = pd.DataFrame(s.exec(stock_q).all(), columns=["sku_id", "day", "on_hand"])
         sku_ids = sorted(s.exec(select(Sku.id)).all())
 

@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 
@@ -121,18 +122,18 @@ class Broken(Agent):
 
 
 async def test_agent_returns_its_update(bb):
-    agent = Working(bb, llm=None, settings=None, strategy={"mode": "Balanced"})
+    agent = Working(bb, llm=cast(Any, None), settings=None, strategy={"mode": "Balanced"})
     assert await agent.run({}) == {"forecast_ready": True}
     assert bb.get("demand_signal") == "STABLE"
 
 
 async def test_a_failing_agent_is_contained_and_logged(bb):
-    result = await Broken(bb, llm=None, settings=None, strategy={}).run({})
+    result = await Broken(bb, llm=cast(Any, None), settings=None, strategy={}).run({})
     assert result == {"errors": ["macroSentinel: RuntimeError: feed unavailable"]}
     error = bb.events(kind="error")[0]
     assert (error.agent, error.phase, error.text) == ("macroSentinel", "sense", "RuntimeError: feed unavailable")
 
 
 async def test_base_agent_must_be_subclassed(bb):
-    result = await Agent(bb, llm=None, settings=None, strategy={}).run({})
+    result = await Agent(bb, llm=cast(Any, None), settings=None, strategy={}).run({})
     assert "NotImplementedError" in result["errors"][0]

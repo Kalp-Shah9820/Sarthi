@@ -90,4 +90,4 @@ def aisle_heat(baskets: pd.DataFrame, sku_aisle: dict[str, str]) -> dict[str, fl
     share = tagged.groupby("aisle")["basket_id"].nunique() / baskets["basket_id"].nunique()
     if share.empty or share.max() == 0:
         return {}
-    return {aisle: round(float(v / share.max() * BUSIEST_AISLE_HEAT), 2) for aisle, v in share.items()}
+    return {str(aisle): round(float(v / share.max() * BUSIEST_AISLE_HEAT), 2) for aisle, v in share.items()}

@@ -10,7 +10,7 @@ import time
 from datetime import UTC, date, timedelta
 from email.message import EmailMessage
 
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from sarthi.agents.base import Agent
 from sarthi.blackboard.store import write_event
@@ -107,7 +107,7 @@ def _purchase(payload: dict, sku_id: str, source: str) -> tuple[str, str]:
 
 def _latest_stock(s, sku_id: str, location_id: str) -> int:
     row = s.exec(select(StockDaily).where(StockDaily.sku_id == sku_id, StockDaily.location_id == location_id)
-                 .order_by(StockDaily.day.desc())).first()
+                 .order_by(col(StockDaily.day).desc())).first()
     return row.on_hand if row else 0
 
 
@@ -153,9 +153,10 @@ def recent_decisions(days: int) -> dict[str, Alert]:
     """The manager's latest decision per recommendation (keyed by proposal id) within the last `days`."""
     cutoff = utcnow() - timedelta(days=days)
     with session() as s:
-        decided = s.exec(select(Alert).where(Alert.status.in_(("approved", "dismissed")), Alert.decided_at.is_not(None))
-                         .order_by(Alert.decided_at)).all()
-    recent = [a for a in decided if (a.decided_at if a.decided_at.tzinfo else a.decided_at.replace(tzinfo=UTC)) >= cutoff]
+        decided = s.exec(select(Alert).where(col(Alert.status).in_(("approved", "dismissed")), col(Alert.decided_at).is_not(None))
+                         .order_by(col(Alert.decided_at))).all()
+    recent = [a for a in decided if a.decided_at is not None
+              and (a.decided_at if a.decided_at.tzinfo else a.decided_at.replace(tzinfo=UTC)) >= cutoff]
     return {a.payload["proposal_id"]: a for a in recent if a.payload.get("proposal_id")}
 
 
@@ -199,7 +200,7 @@ def execute_payload(kind: str, payload: dict, *, sku_id: str, run_id: int, sourc
     elif kind == "audit":
         txid = f"TASK-{base36(time.time_ns() // 1_000)[-5:]}"
         task = {"cap_order": "Cap the next order at normal demand", "cycle_count": f"Count stock in aisle {payload.get('aisle', '?')}"}
-        line = f"{task.get(payload.get('task'), 'Review')} for {sku_id}"
+        line = f"{task.get(str(payload.get('task')), 'Review')} for {sku_id}"
     else:
         raise ValueError(f"cannot execute kind '{kind}'")
     write_event(run_id, kind="action", agent="executionEngine", phase="execute", text=line, sku_id=sku_id,
@@ -219,6 +220,8 @@ def execute_alert(alert_id: int, source: str = "alert") -> dict:
     result = execute_payload(payload["kind"], payload, sku_id=sku_id, run_id=run_id, source=source)
     with session() as s:
         alert = s.get(Alert, alert_id)
+        if alert is None:              # deleted while it was being executed
+            raise LookupError(f"alert {alert_id} not found")
         alert.txid, alert.status, alert.decided_at = result["txid"], "approved", utcnow()
         s.add(alert)
         s.commit()
@@ -268,6 +271,7 @@ class ExecutionEngine(Agent):
                 s.commit()
                 s.refresh(alert)
                 alert_id = alert.id
+                assert alert_id is not None       # set by the database on commit
             alert_ids.append(alert_id)
             if ruling.get("routed") == "auto":
                 result = execute_alert(alert_id, source="auto")

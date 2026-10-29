@@ -142,7 +142,7 @@ def _simulate_sku(sku: dict, days: list[date], mu: np.ndarray, demand: np.ndarra
         if sku["zone"] == "sweet":   # healthy: the delivery topped up a comfortable cushion
             cushion = min(round(mu[recent_day] * sku["lead"] * SWEET_CUSHION), int(after_delivery * 0.75))
         else:                        # chaos: the shelf was nearly bare when it arrived
-            cushion = min(round(mu[recent_day]), int(after_delivery * 0.5))
+            cushion = min(round(float(mu[recent_day])), int(after_delivery * 0.5))
         recent_qty = after_delivery - cushion
         start = cushion + int(demand[ws:recent_day].sum())
     else:
@@ -238,8 +238,12 @@ def _last_months(today: date, n: int) -> list[str]:
     return out[::-1]
 
 
-def build_dataset(seed: int, today: date) -> dict:
-    """Return every seed row, keyed by table name. Pure: no database or file access."""
+def build_dataset(seed: int, today: date, capture: dict | None = None) -> dict:
+    """Return every seed row, keyed by table name. Pure: no database or file access.
+
+    `capture`, when given, receives what the tables do not store: the true daily demand per SKU
+    (including what was wanted on empty-shelf days) and the daily units sold.
+    """
     rng = np.random.default_rng(seed)
     days = history_days(today)
     suppliers = {s["id"]: s for s in cat.SUPPLIERS}
@@ -269,6 +273,10 @@ def build_dataset(seed: int, today: date) -> dict:
                 out = ledgers[fall]["on_hand"] == 0
                 demand[sku_id] = demand[sku_id] + np.where(out, np.rint(cat.CANNIBAL_SHARE * mu[fall]), 0).astype(int)
         ledgers[sku_id] = _simulate_sku(by_id[sku_id], days, mu[sku_id], demand[sku_id], suppliers, rng)
+
+    if capture is not None:
+        capture["demand"] = {sku_id: np.asarray(values, dtype=float) for sku_id, values in demand.items()}
+        capture["sold"] = {sku_id: np.asarray(led["sold"], dtype=float) for sku_id, led in ledgers.items()}
 
     stock_daily, inbounds, deliveries = [], [], []
     for s in skus:  # catalogue order, independent of simulation order
@@ -320,6 +328,13 @@ def build_dataset(seed: int, today: date) -> dict:
         "inbound": inbounds,
         "delivery": deliveries,
     }
+
+
+def true_demand(seed: int, today: date) -> dict[str, dict[str, np.ndarray]]:
+    """{"demand": {sku: per day}, "sold": {sku: per day}} as generated for this seed and day. For the backtest."""
+    capture: dict = {}
+    build_dataset(seed, today, capture)
+    return capture
 
 
 def write_feeds() -> None:

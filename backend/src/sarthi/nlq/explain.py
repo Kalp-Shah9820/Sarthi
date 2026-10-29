@@ -1,7 +1,7 @@
 """Why a product is where it is, in one short paragraph built from stored facts."""
 
 from sqlalchemy import func
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.db import session
 from sarthi.llm import prompts, templates
@@ -41,7 +41,7 @@ def facts_for(sku_id: str, lang: str = "EN") -> tuple[str, dict]:
         if snap is None:
             raise NotReady("warming up")
         alerts = s.exec(select(Alert).where(Alert.run_id == run_id, Alert.sku_id == sku_id, Alert.status == "open")
-                        .order_by(Alert.impact_value.desc())).all()
+                        .order_by(col(Alert.impact_value).desc())).all()
 
     m = snap.metrics
     facts = {

@@ -33,8 +33,13 @@ def apply_safety_multiplier(ltd: np.ndarray, safety_stock: float, multiplier: fl
 
 def order_quantity(mu: np.ndarray, k: float, lead_days: float, review_days: int, sl: float,
                    inventory_position: float, moq: int, shelf_life_days: float, capacity: float | None,
-                   seed: int) -> int:
-    """Order up to the `sl` quantile of demand over lead time + review period, within shelf-life and capacity."""
+                   seed: int, safety_multiplier: float = 1.0) -> int:
+    """Order up to the `sl` quantile of demand over lead time + review period, within shelf-life and capacity.
+
+    `safety_multiplier` scales the part of that level above expected demand, exactly as it scales safety
+    stock in the reorder point: Cash Flow (0.8) orders less buffer, Growth (1.5) more. Without it the
+    strategy changed when to order but not how much.
+    """
     mu = np.asarray(mu, dtype=float)
     span = math.ceil(lead_days) + review_days
     if span > len(mu):
@@ -42,7 +47,8 @@ def order_quantity(mu: np.ndarray, k: float, lead_days: float, review_days: int,
     m = np.maximum(mu[:span], 1e-9)
     rng = np.random.default_rng(seed)
     total = rng.negative_binomial(k, k / (k + m), size=(ORDER_PATHS, span)).sum(axis=1)
-    up_to = float(np.quantile(total, sl))
+    expected = float(np.mean(total))
+    up_to = expected + max(0.0, float(safety_multiplier)) * (float(np.quantile(total, sl)) - expected)
     qty = up_to - inventory_position
     if qty <= 0:
         return 0

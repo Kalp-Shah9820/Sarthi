@@ -1,30 +1,18 @@
-"""Forecasting, basket mining and cannibalization, on toy inputs and on the seeded database."""
+"""Forecasting: loading the history, the building blocks, model choice on the seeded data, the bullwhip view."""
 
 from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
 import pytest
-from sqlmodel import select
 
-from sarthi import validate
-from sarthi.analytics import basket, cannibal, data, forecast
-from sarthi.db import session
-from sarthi.models import Sku
+from sarthi.analytics import (
+    bullwhip,
+    data,
+    forecast,
+)
 from sarthi.seed import catalog as cat
 from tests.conftest import TEST_TODAY
-
-
-@pytest.fixture(scope="module")
-def sku_info(seeded_db):
-    with session() as s:
-        skus = s.exec(select(Sku)).all()
-    return {
-        "names": {k.id: k.name for k in skus},
-        "categories": {k.id: k.category for k in skus},
-        "aisles": {k.id: k.aisle_id for k in skus},
-    }
-
 
 # ── Loading ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +35,6 @@ def test_weekly_totals(store_data):
     weeks = data.weekly_totals(store_data[0])
     assert len(weeks) == 12 and all(w > 0 for w in weeks)
     assert data.weekly_totals(pd.DataFrame(columns=["sku_id", "day", "qty"])) == []
-
 
 # ── Forecast building blocks ─────────────────────────────────────────────────
 
@@ -79,7 +66,6 @@ def test_month_labels():
     labels = forecast.month_labels(date(2026, 10, 1))
     assert len(labels) == 12
     assert labels[-1] == "Sep" and labels[0] == "Oct"         # block midpoints, oldest first
-
 
 # ── Forecast on seeded data ──────────────────────────────────────────────────
 
@@ -142,85 +128,14 @@ def test_external_forecast_is_blended_at_30_percent():
     assert daily[0] == pytest.approx(0.7 * 10 + 0.3 * 20)
     assert daily[1] == pytest.approx(10.0)
 
+# ── Bullwhip ─────────────────────────────────────────────────────────────────
 
-# ── Basket analysis ──────────────────────────────────────────────────────────
-
-TOY = pd.DataFrame(
-    [("b1", "A"), ("b1", "B"), ("b2", "A"), ("b2", "B"), ("b3", "A"), ("b3", "B"), ("b4", "A"), ("b5", "C"), ("b6", "C")],
-    columns=["basket_id", "sku_id"],
-)
-
-
-def test_rule_metrics_match_hand_calculation():
-    rules = {(tuple(r["antecedent_ids"]), r["consequent_id"]): r for r in basket.mine_rules(TOY, {"A": "Apple", "B": "Bread"})}
-    a_to_b, b_to_a = rules[(("A",), "B")], rules[(("B",), "A")]
-    # 6 baskets; A in 4, B in 3, both in 3
-    assert (a_to_b["support"], a_to_b["confidence"], a_to_b["lift"]) == (0.5, 0.75, 1.5)
-    assert (b_to_a["support"], b_to_a["confidence"], b_to_a["lift"]) == (0.5, 1.0, 1.5)
-    assert a_to_b["antecedent"] == ["Apple"] and a_to_b["consequent"] == "Bread"
-    assert all("C" not in k[0] and k[1] != "C" for k in rules)       # C is bought alone: no rule
-    assert basket.mine_rules(TOY.iloc[:0], {}) == []
-
-
-def test_aisle_views():
-    rules = basket.mine_rules(TOY, {})
-    pairs = basket.aisle_pairs(rules, {"A": "X", "B": "Y", "C": "Z"})
-    assert pairs == [{"from": "y", "to": "x", "strength": 100}, {"from": "x", "to": "y", "strength": 75}]
-    assert basket.aisle_connections(pairs) == {"X": ["Y"], "Y": ["X"]}
-    assert basket.aisle_pairs(rules, {"A": "X", "B": "X"}) == []      # same aisle is not a connection
-    heat = basket.aisle_heat(TOY, {"A": "X", "B": "Y", "C": "Z"})
-    assert heat == {"X": 0.92, "Y": 0.69, "Z": 0.46}
-
-
-def test_seeded_baskets_recover_the_catalogue_rules(seeded_db, sku_info):
-    rules = basket.mine_rules(data.basket_frame(), sku_info["names"])
-    assert 1 <= len(rules) <= 8
-    assert rules == sorted(rules, key=lambda r: -r["confidence"])
-    found = {(tuple(r["antecedent_ids"]), r["consequent_id"]): r["confidence"] for r in rules}
-    assert found[(("SKU001",), "SKU008")] == pytest.approx(0.72, abs=0.1)   # Amul Butter -> Parle-G, as seeded
-    assert all(r["lift"] > 1.1 and 0 < r["support"] <= 1 for r in rules)
-    pairs = basket.aisle_pairs(rules, sku_info["aisles"])
-    assert {"from": "a", "to": "b"}.items() <= next(p for p in pairs if p["from"] == "a").items()
-    heat = basket.aisle_heat(data.basket_frame(), sku_info["aisles"])
-    assert max(heat.values()) == 0.92 and max(heat, key=heat.get) == "C"    # snacks is the busiest aisle
-
-
-# ── Cannibalization ──────────────────────────────────────────────────────────
-
-def synthetic_pair(uplift: float):
-    rng = np.random.default_rng(2)
-    days = [date(2026, 1, 1) + timedelta(days=i) for i in range(200)]
-    empty = np.zeros(200, dtype=bool)
-    empty[[40, 41, 42, 90, 91, 130, 131, 132, 170, 171]] = True
-    rising = rng.poisson(50, 200) + np.where(empty, uplift * 50, 0)
-    falling = np.where(empty, 0, rng.poisson(80, 200))
-    sales = pd.concat([pd.DataFrame({"sku_id": "R", "day": days, "qty": rising.astype(float)}),
-                       pd.DataFrame({"sku_id": "F", "day": days, "qty": falling.astype(float)})])
-    stock = pd.concat([pd.DataFrame({"sku_id": "R", "day": days, "on_hand": 500.0}),
-                       pd.DataFrame({"sku_id": "F", "day": days, "on_hand": np.where(empty, 0.0, 300.0)})])
-    return sales, stock
-
-
-def test_cannibalization_detected_only_when_sales_really_shift():
-    cats = {"R": "Snacks", "F": "Snacks"}
-    found = cannibal.detect(*synthetic_pair(uplift=0.8), cats, {"R": "Rising", "F": "Falling"})
-    assert len(found) == 1
-    assert (found[0]["rising"], found[0]["falling"], found[0]["rName"]) == ("R", "F", "Rising")
-    assert found[0]["correlation"] < -0.3 and found[0]["uplift"] == pytest.approx(0.8, abs=0.15)
-    assert found[0]["event_days"] == 10
-    assert cannibal.detect(*synthetic_pair(uplift=0.0), cats) == []                       # no shift -> nothing
-    assert cannibal.detect(*synthetic_pair(uplift=0.8), {"R": "Snacks", "F": "Dairy"}) == []  # different categories
-
-
-def test_seeded_cannibalization_pair_is_found(store_data, sku_info):
-    found = cannibal.detect(*store_data, sku_info["categories"], sku_info["names"])
-    pairs = {(f["rising"], f["falling"]) for f in found}
-    assert ("SKU010", "SKU003") in pairs          # Haldirams gains when Lays is out, as the generator built it
-    assert ("SKU003", "SKU010") not in pairs      # and not the other way round
-    assert pairs <= set(cat.CANNIBALIZATION)      # nothing spurious
-    assert all(f["correlation"] < 0 and f["uplift"] >= 0.15 for f in found)
-
-
-def test_validator_analytics_check(seeded_db):
-    result = validate.check_analytics()
-    assert result.status == validate.PASS, result.detail
+def test_bullwhip_series():
+    flat = bullwhip.series([100.0] * 12)
+    assert flat["reorder"] == [None] * 12 and flat["ratio"] == 1.0
+    noisy = bullwhip.series([100, 140, 90, 150, 95, 145, 100, 150, 90, 140, 95, 150, 100, 140])
+    assert len(noisy["raw"]) == 12 and noisy["labels"][0] == "W1" and noisy["labels"][-1] == "W12"
+    assert noisy["ratio"] > 1 > noisy["ratio_smoothed"]               # chasing demand amplifies; smoothing dampens
+    step = bullwhip.series([100.0] * 6 + [140.0] * 6)
+    assert step["reorder"][6] is not None and step["reorder"][:6] == [None] * 6
+    assert bullwhip.series([])["raw"] == []

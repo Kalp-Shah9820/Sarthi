@@ -6,10 +6,11 @@ Nothing here computes a decision: every number was produced by an agent during t
 
 import statistics
 import threading
+from collections.abc import Sequence
 from datetime import UTC, date, timedelta
 
 from sqlalchemy import func
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.agents import debate as debate_lines
 from sarthi.agents.distributor_selector import MIN_DISTANCE_KM
@@ -81,8 +82,8 @@ def reset() -> None:
 def strategy_view() -> dict:
     """The strategy in force, as the UI context holds it."""
     with session() as s:
-        policy = s.exec(select(StrategyPolicy).where(StrategyPolicy.active).order_by(StrategyPolicy.id.desc())).first()
-        run = s.exec(select(Run).where(Run.dry_run.is_(False)).order_by(Run.id.desc())).first()
+        policy = s.exec(select(StrategyPolicy).where(StrategyPolicy.active).order_by(col(StrategyPolicy.id).desc())).first()
+        run = s.exec(select(Run).where(col(Run.dry_run).is_(False)).order_by(col(Run.id).desc())).first()
     changed = policy.created_at if policy else run.started_at if run else None
     return {**active_strategy(), "lastUpdate": local_time(changed) if changed else ""}
 
@@ -149,7 +150,7 @@ def _costed(name: str, qty: float, km: float) -> list[dict]:
 
 def _drift(s, sku_ids: list[str]) -> dict:
     """Zone of each SKU on the last seven days on record, oldest first."""
-    rows = s.exec(select(SkuSnapshot.as_of, SkuSnapshot.sku_id, SkuSnapshot.zone).order_by(SkuSnapshot.run_id)).all()
+    rows = s.exec(select(col(SkuSnapshot.as_of), col(SkuSnapshot.sku_id), col(SkuSnapshot.zone)).order_by(col(SkuSnapshot.run_id))).all()
     latest: dict[tuple[date, str], str] = {(day, sku_id): zone for day, sku_id, zone in rows}   # later runs win
     days = sorted({day for day, _ in latest})[-DRIFT_DAYS:]
     data = []
@@ -165,10 +166,10 @@ def _drift(s, sku_ids: list[str]) -> dict:
 def _warehouses(s) -> list[dict]:
     sites = s.exec(select(Location).where(Location.kind == "warehouse").order_by(Location.id)).all()
     last = (select(StockDaily.sku_id, StockDaily.location_id, func.max(StockDaily.day).label("day"))
-            .where(StockDaily.location_id.in_([x.id for x in sites]))
+            .where(col(StockDaily.location_id).in_([x.id for x in sites]))
             .group_by(StockDaily.sku_id, StockDaily.location_id).subquery())
     rows = s.exec(select(StockDaily.location_id, StockDaily.sku_id, StockDaily.on_hand).join(
-        last, (StockDaily.sku_id == last.c.sku_id) & (StockDaily.location_id == last.c.location_id)
+        last, (col(StockDaily.sku_id) == last.c.sku_id) & (col(StockDaily.location_id) == last.c.location_id)
         & (StockDaily.day == last.c.day))).all()
     held: dict[str, dict[str, int]] = {}
     for location_id, sku_id, on_hand in rows:
@@ -192,7 +193,7 @@ def _alert_view(alert: Alert, lang: str) -> dict:
             "msg": msg, "action": action, "impact": impact, "status": alert.status, "txid": alert.txid}
 
 
-def _risk_views(signals: list[RiskSignal]) -> tuple[list[dict], list[dict]]:
+def _risk_views(signals: Sequence[RiskSignal]) -> tuple[list[dict], list[dict]]:
     cards, pins = [], []
     for sig in signals:
         card = {"id": sig.id, "type": sig.type, "severity": sig.severity, "skus": sig.skus_at_risk, "icon": sig.icon,
@@ -223,6 +224,8 @@ def _build(run_id: int, lang: str) -> dict:
 
     with session() as s:
         run = s.get(Run, run_id)
+        if run is None:
+            raise NotReady(f"run {run_id} is not on record")
         skus = s.exec(select(Sku).order_by(Sku.id)).all()
         suppliers = {x.id: x for x in s.exec(select(Supplier)).all()}
         links = s.exec(select(SkuSupplier)).all()
@@ -230,19 +233,19 @@ def _build(run_id: int, lang: str) -> dict:
         today = s.exec(select(func.max(SkuSnapshot.as_of)).where(SkuSnapshot.run_id == run_id)).one()
         snaps = {x.sku_id: x for x in s.exec(
             select(SkuSnapshot).where(SkuSnapshot.run_id == run_id, SkuSnapshot.as_of == today)).all()}
-        alerts = s.exec(select(Alert).where(Alert.run_id == run_id, Alert.status.in_(("open", "approved")))
-                        .order_by(Alert.impact_value.desc(), Alert.id)).all()
+        alerts = s.exec(select(Alert).where(Alert.run_id == run_id, col(Alert.status).in_(("open", "approved")))
+                        .order_by(col(Alert.impact_value).desc(), col(Alert.id))).all()
         since = utcnow() - timedelta(hours=RECENT_APPROVED_HOURS)
         earlier = [a for a in s.exec(select(Alert).where(Alert.run_id != run_id, Alert.status == "approved")).all()
                    if a.decided_at and (a.decided_at if a.decided_at.tzinfo else a.decided_at.replace(tzinfo=UTC)) >= since]
-        trail = s.exec(select(Event).join(Run, Run.id == Event.run_id).where(Event.kind == "action", Run.dry_run.is_(False))
-                       .order_by(Event.id.desc()).limit(AUDIT_ROWS)).all()
-        signals = s.exec(select(RiskSignal).where(RiskSignal.active).order_by(RiskSignal.id)).all()
+        trail = s.exec(select(Event).join(Run, col(Run.id) == Event.run_id).where(Event.kind == "action", col(Run.dry_run).is_(False))
+                       .order_by(col(Event.id).desc()).limit(AUDIT_ROWS)).all()
+        signals = s.exec(select(RiskSignal).where(RiskSignal.active).order_by(col(RiskSignal.id))).all()
         aisles = s.exec(select(Aisle).order_by(Aisle.id)).all()
         prices = s.exec(select(PriceHistory).order_by(PriceHistory.month)).all()
         live_campaigns = {c.type for c in s.exec(select(Campaign).where(Campaign.status == "live")).all()}
-        uploads = s.exec(select(Upload).where(Upload.status == "done").order_by(Upload.id)).all()
-        policy = s.exec(select(StrategyPolicy).where(StrategyPolicy.active).order_by(StrategyPolicy.id.desc())).first()
+        uploads = s.exec(select(Upload).where(Upload.status == "done").order_by(col(Upload.id))).all()
+        policy = s.exec(select(StrategyPolicy).where(StrategyPolicy.active).order_by(col(StrategyPolicy.id).desc())).first()
         drift = _drift(s, [k.id for k in skus])
         warehouses = _warehouses(s)
 
@@ -265,8 +268,8 @@ def _build(run_id: int, lang: str) -> dict:
         if snap is None:
             continue                                    # added after this run; it appears after the next one
         m, f, order = snap.metrics, forecast.get(sku.id, {}), purchase.get(sku.id)
-        supplier = suppliers.get((order or {}).get("supplier_id") or m.get("supplier_id") or primary.get(sku.id))
-        usual = suppliers.get(m.get("supplier_id") or primary.get(sku.id))
+        supplier = suppliers.get((order or {}).get("supplier_id") or m.get("supplier_id") or primary.get(sku.id) or "")
+        usual = suppliers.get(m.get("supplier_id") or primary.get(sku.id) or "")
         vel, lead, risk = round(m["velocity"]), round(m["lead_mean"]), int(m["risk"])
         stockout = int(m.get("risk_shortage", risk))     # `risk` also covers overstock; this is the chance of running out
         qty = int(order["qty"]) if order else round(vel * lead * 1.3)

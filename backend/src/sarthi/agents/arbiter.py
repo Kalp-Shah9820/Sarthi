@@ -207,7 +207,7 @@ class Arbiter(Agent):
         for original in sorted(state.get("proposals", []), key=lambda x: -x["par_rescued"]):
             p = copy.deepcopy(original)
             p["_applied"], p["modes_qty"] = set(), p["payload"].get("qty", 0)
-            say(VOICE.get(p["author"], p["author"]), f"propose:{p['alert_type']}", p["facts"], "propose", p["sku_id"])
+            say(VOICE.get(p["author"]) or p["author"], f"propose:{p['alert_type']}", p["facts"], "propose", p["sku_id"])
             said: set[str] = set()
             rejected_for, warnings = None, []
             for round_no in range(MAX_ROUNDS + 1):
@@ -235,7 +235,7 @@ class Arbiter(Agent):
                             rejected_for = o["rule"]
                         continue
                     p["status"] = "revised"
-                    say(VOICE.get(p["author"], p["author"]), change[0], change[1], "revise", p["sku_id"])
+                    say(VOICE.get(p["author"]) or p["author"], change[0], change[1], "revise", p["sku_id"])
                 if rejected_for:
                     break
             if p["kind"] == "purchase" and not rejected_for:

@@ -4,10 +4,11 @@ import asyncio
 import json
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 import numpy as np
 import pytest
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from sarthi import validate
 from sarthi.agents import compliance_guardian as cg
@@ -92,7 +93,7 @@ def test_decision_record_carries_display_fields(baseline):
 
 def test_seven_days_of_zone_history_are_stored(baseline):
     with session() as s:
-        everything = s.exec(select(SkuSnapshot).order_by(SkuSnapshot.run_id)).all()
+        everything = s.exec(select(SkuSnapshot).order_by(col(SkuSnapshot.run_id))).all()
     latest = {(r.as_of, r.sku_id): r for r in everything}          # the newest stored row per day and SKU
     rows = list(latest.values())
     days = sorted({r.as_of for r in rows})
@@ -225,8 +226,11 @@ def test_fuse_caps_compounding_signals():
 def test_weather_thresholds_and_region_labels():
     calm = weather_signal("Mumbai", 19.08, 72.88, {"rain_mm": 20, "wind_kmh": 25, "temp_c": 33})
     storm = weather_signal("Mumbai", 19.08, 72.88, {"rain_mm": 40, "wind_kmh": 80, "temp_c": 30})
+    assert storm is not None
     rain = weather_signal("Pune", 18.52, 73.86, {"rain_mm": 70, "wind_kmh": 20, "temp_c": 28})
+    assert rain is not None
     heat = weather_signal("Delhi", 28.61, 77.21, {"rain_mm": 0, "wind_kmh": 10, "temp_c": 44})
+    assert heat is not None
     assert calm is None
     assert (storm["severity"], storm["lead_modifier"], storm["region_key"]) == ("HIGH", 1.5, "jnptMumbai")
     assert "80 km/h" in storm["msg"] and storm["msg_key"] is None
@@ -243,7 +247,7 @@ def test_feeds_are_read_from_the_seeded_files(seeded_db):
 
 def sentinel(run_id, **settings_overrides):
     settings = get_settings().model_copy(update=settings_overrides)
-    return MacroSentinel(Blackboard(run_id), SimpleNamespace(), settings, dict(BALANCED))
+    return MacroSentinel(Blackboard(run_id), cast(Any, SimpleNamespace()), settings, dict(BALANCED))
 
 
 async def test_weather_outage_is_logged_and_the_run_continues(baseline, monkeypatch):
@@ -254,7 +258,7 @@ async def test_weather_outage_is_logged_and_the_run_continues(baseline, monkeypa
     state = await sentinel(RUN + 30, weather_enabled=True).run({"dry_run": True})
     assert state["lead_modifier"]["SUP-REL"] == 1.25      # feeds still applied
     errors = Blackboard(RUN + 30).events(kind="error")
-    assert len(errors) == 1 and "TimeoutError" in errors[0].text       # one failure, not one per city
+    assert len(errors) == 1 and "TimeoutError" in (errors[0].text or "")       # one failure, not one per city
 
 
 async def test_storm_forecast_becomes_a_stored_high_signal(baseline, monkeypatch):
@@ -269,7 +273,7 @@ async def test_storm_forecast_becomes_a_stored_high_signal(baseline, monkeypatch
         assert count(RiskSignal, RiskSignal.source == "weather") == 5                       # one per city
         bb = Blackboard(RUN + 31)
         assert bb.get("lead_time_risk") == "HIGH"
-        assert sum("Storm forecast" in e.text for e in bb.events(kind="action")) == 5
+        assert sum("Storm forecast" in (e.text or "") for e in bb.events(kind="action")) == 5
     finally:
         await sentinel(RUN + 32).run({})                  # weather off again: rebuild the stored signals
     assert count(RiskSignal, RiskSignal.source == "weather") == 0 and count(RiskSignal, RiskSignal.source == "feed") == 3
@@ -304,7 +308,7 @@ async def test_news_headlines_are_classified_by_the_model(baseline):
     path = get_settings().feeds_dir / "news.json"
     path.write_text(json.dumps(["Truckers strike near Mumbai port", "Cricket team wins series"]), encoding="utf-8")
     try:
-        agent = MacroSentinel(Blackboard(RUN + 34), FakeLlm(), get_settings(), dict(BALANCED))
+        agent = MacroSentinel(Blackboard(RUN + 34), cast(Any, FakeLlm()), get_settings(), dict(BALANCED))
         state = await agent.run({"dry_run": True})
         assert state["signal_count"] == 4                                      # 3 feeds + 1 relevant headline
         assert state["lead_modifier"]["SUP-REL"] == pytest.approx(1.25 * 1.5)  # the model's 9.0 is clamped to 1.5
@@ -443,6 +447,7 @@ def test_envelope_follows_strategy_spend_and_preferences(seeded_db):
             Preference(scope="sku", target="SKU001", directive="cap_qty", value=10, active=False),
         ])
         mcc = s.get(Supplier, "SUP-MCC")
+        assert mcc is not None
         mcc.esg_score = 41.0
         s.add(mcc)
         s.commit()
@@ -459,6 +464,7 @@ def test_envelope_follows_strategy_spend_and_preferences(seeded_db):
                 for row in s.exec(select(model)).all():
                     s.delete(row)
             mcc = s.get(Supplier, "SUP-MCC")
+            assert mcc is not None
             mcc.esg_score = 61.0
             s.add(mcc)
             s.commit()

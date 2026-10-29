@@ -5,7 +5,6 @@ The model is switched off unless a test hands the gateway a canned reply.
 
 import asyncio
 import json
-import os
 import re
 from datetime import timedelta
 
@@ -14,21 +13,19 @@ from fastapi.testclient import TestClient
 from sqlmodel import func, select
 
 from sarthi import validate
-from sarthi.agents import demand_intel
 from sarthi.api import presenters
 from sarthi.api.main import create_app
 from sarthi.api.routers import runs
 from sarthi.config import BACKEND_ROOT, get_settings
-from sarthi.db import init_db, reset_engine, session
-from sarthi.llm import get_llm, reset_llm, templates
+from sarthi.db import session
+from sarthi.llm import get_llm, templates
 from sarthi.llm.grounding import grounded
 from sarthi.models import Alert, Event, Preference, PurchaseOrder, Run, Sku, StrategyPolicy, local_today
 from sarthi.nlq import handlers, router, strategy, voice
 from sarthi.nlq.catalogue import resolve_sku
 from sarthi.nlq.intents import Intent
 from sarthi.orchestrator.runner import active_strategy, run_pipeline, run_summary
-from sarthi.seed.generator import seed_database
-from tests.conftest import TEST_SEED, TEST_TODAY
+from tests.conftest import must, private_database
 
 I18N = BACKEND_ROOT.parent / "src" / "data" / "i18n.js"
 DEVANAGARI = re.compile(r"[ऀ-ॿ]")
@@ -61,30 +58,12 @@ NEW = [
 
 
 @pytest.fixture(scope="module")
-def client(tmp_path_factory, analysis):
-    """A seeded database of its own with one completed run, and a client whose event loop lasts the module."""
-    root = tmp_path_factory.mktemp("nlq")
-    previous = {k: os.environ[k] for k in ("SARTHI_DB_PATH", "SARTHI_OUTBOX_PATH")}
-    os.environ.update(SARTHI_DB_PATH=str(root / "nlq.db"), SARTHI_OUTBOX_PATH=str(root / "outbox"))
-    get_settings.cache_clear()
-    reset_engine()
-    reset_llm()
-    presenters.reset()
-    init_db()
-    seed_database(TEST_SEED, today=TEST_TODAY)
-    saved_cache = dict(demand_intel._cache)
-    demand_intel._cache[demand_intel._fingerprint(get_settings())] = analysis    # same data, so the same analysis holds
-    asyncio.run(run_pipeline("test"))
-    with TestClient(create_app()) as test_client:
-        yield test_client
-    demand_intel._cache.clear()
-    demand_intel._cache.update(saved_cache)
-    reset_engine()
-    os.environ.update(previous)
-    get_settings.cache_clear()
-    reset_engine()
-    reset_llm()
-    presenters.reset()
+def client(tmp_path_factory, template_db, analysis):
+    """A copy of the seeded database with one completed run, and a client whose event loop lasts the module."""
+    with private_database(tmp_path_factory, template_db, "nlq", analysis=analysis):
+        asyncio.run(run_pipeline("test"))
+        with TestClient(create_app()) as test_client:
+            yield test_client
 
 
 def chat(client, text: str, lang: str = "EN") -> dict:
@@ -114,12 +93,12 @@ def count(model, *where) -> int:
 
 def wait_for_runs(client) -> int:
     """Block until the run most recently started through the API has finished. Returns its id."""
-    run_id = runs._current[0]
+    run_id = must(runs._current)[0]
     with client.stream("GET", f"/api/runs/{run_id}/stream") as r:
         for _ in r.iter_lines():
             pass
     with session() as s:
-        assert s.get(Run, run_id).status == "done"
+        assert must(s.get(Run, run_id)).status == "done"
     return run_id
 
 
@@ -140,19 +119,19 @@ def test_rule_router(client, sentence, expected):
 
 
 def test_rule_router_extracts_details(client):
-    assert router.route_rules("which SKUs will stock out in 7 days").days == 7
-    assert router.route_rules("what runs out in 2 weeks").days == 14
-    assert router.route_rules("anything about to run out?").days == 7
+    assert must(router.route_rules("which SKUs will stock out in 7 days")).days == 7
+    assert must(router.route_rules("what runs out in 2 weeks")).days == 14
+    assert must(router.route_rules("anything about to run out?")).days == 7
     assert router.route_rules("reorder 50 units of lays") == Intent(name="reorder", sku="SKU003", quantity=50)
-    assert router.route_rules("reorder lays classic 26g").quantity == 0                # the pack size is not a quantity
-    assert router.route_rules("prioritize cash flow over growth").mode == "Cash Flow"
-    assert router.route_rules("strategy reset to normal").mode == "Balanced"
+    assert must(router.route_rules("reorder lays classic 26g")).quantity == 0                # the pack size is not a quantity
+    assert must(router.route_rules("prioritize cash flow over growth")).mode == "Cash Flow"
+    assert must(router.route_rules("strategy reset to normal")).mode == "Balanced"
     assert router.route_rules("why is that happening") is None                         # no product named: ask the model
     assert router.route_rules("tell me a joke") is None
     for sentence in ("what is the capital of France?", "a model question", "the hospital", "a despot"):
         assert router.route_rules(sentence) is None, sentence            # "pit", "mode", "spot" inside other words
-    assert router.route_rules("suppliers?").name == "suppliers" and router.route_rules("all the zones").name == "zones"
-    assert router.route_rules("   ").name == "unknown"
+    assert must(router.route_rules("suppliers?")).name == "suppliers" and must(router.route_rules("all the zones")).name == "zones"
+    assert must(router.route_rules("   ")).name == "unknown"
 
 
 def test_resolve_sku(client):
@@ -235,7 +214,7 @@ def test_text_answers_are_computed_and_bilingual(client):
     assert str(get_settings().mc_paths) in chat(client, "monte carlo results")["text"]
     week = chat(client, "which SKUs will stock out in 7 days")["text"]
     month = chat(client, "which SKUs will stock out in 60 days")["text"]
-    assert int(re.match(r"(\d+)", month).group(1)) >= int(re.match(r"(\d+)", week).group(1))
+    assert int(must(re.match(r"(\d+)", month)).group(1)) >= int(must(re.match(r"(\d+)", week)).group(1))
 
 
 def test_fixed_claims_in_frontend_templates_are_only_used_when_true():
@@ -330,7 +309,8 @@ def test_reorder_creates_one_alert_for_approval_and_no_order(client):
     with session() as s:
         made = [a for a in s.exec(select(Alert).where(Alert.sku_id == "SKU003", Alert.status == "open")).all()
                 if a.payload.get("source") == "chat"]
-        moq = s.get(Sku, "SKU003").moq
+        moq = must(s.get(Sku, "SKU003")).moq
+        assert moq is not None
     assert len(made) == 1 and count(PurchaseOrder) == orders
     alert = made[0]
     assert alert.type == "stockout_reorder" and alert.routed == "review"
@@ -352,6 +332,7 @@ def test_reorder_creates_one_alert_for_approval_and_no_order(client):
     assert approved.status_code == 200, approved.text
     with session() as s:
         po = s.get(PurchaseOrder, approved.json()["txid"])
+        assert po is not None
     assert (po.sku_id, po.qty, po.source) == ("SKU003", again[0].payload["qty"], "alert")
 
 
@@ -376,8 +357,8 @@ def test_compile_policy():
     assert compiled("go for aggressive growth for 2 weeks") == strategy.PolicyOut(mode="Growth", horizon_days=14)
     assert compiled("बचत को प्राथमिकता दो 10 दिन") == strategy.PolicyOut(mode="Cash Flow", horizon_days=10)
     assert compiled("reset to normal") == strategy.PolicyOut(mode="Balanced", horizon_days=30)
-    assert compiled("growth for 999 days").horizon_days == 180              # clamped
-    assert compiled("growth for 0 days").horizon_days == 30              # not a duration: the default applies
+    assert must(compiled("growth for 999 days")).horizon_days == 180              # clamped
+    assert must(compiled("growth for 0 days")).horizon_days == 30              # not a duration: the default applies
 
     class Model:
         def __init__(self, reply):
@@ -447,9 +428,9 @@ def test_apply_policy_and_expiry(client):
         s.commit()
     assert active_strategy() == {"mode": "Balanced", **strategy.PRESETS["Balanced"]}
     run_id = asyncio.run(run_pipeline("test"))
-    assert run_summary(run_id)["status"] == "done"
+    assert must(run_summary(run_id))["status"] == "done"
     with session() as s:
-        assert s.get(Run, run_id).strategy["mode"] == "Balanced"
+        assert must(s.get(Run, run_id)).strategy["mode"] == "Balanced"
     presenters.bump()
 
 
@@ -514,7 +495,7 @@ def test_voice_safety_stock_adjustment_takes_effect_in_a_new_run(client):
 def test_voice_rules_alone_do_nothing(client):
     """`rules` only reads; the adjustment is stored by `interpret`."""
     stored = count(Preference)
-    assert voice.rules("increase safety stock for colgate")["type"] == "PROCURE"
+    assert must(voice.rules("increase safety stock for colgate"))["type"] == "PROCURE"
     assert voice.rules("mumble") is None
     assert count(Preference) == stored
 
@@ -557,4 +538,5 @@ def test_runs_cut_off_by_a_server_stop_are_closed_at_startup(client):
         pass
     with session() as s:
         run = s.get(Run, stale)
+        assert run is not None
     assert run.status == "interrupted" and run.finished_at is not None

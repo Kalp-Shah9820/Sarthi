@@ -34,7 +34,7 @@ def stream_run(run_id: int, kinds: set[str], render: Callable[[dict], dict],
         try:
             last = 0
             for stored in await asyncio.to_thread(store.Blackboard(run_id).events):
-                last = stored.id
+                last = stored.id or last
                 if stored.kind in kinds:
                     yield line(store.as_dict(stored))
             if await asyncio.to_thread(_finished, run_id):      # nothing more will be published

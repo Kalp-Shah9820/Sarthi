@@ -1,21 +1,19 @@
 import io
 import json
-import os
 from datetime import timedelta
 
 import pandas as pd
 import pytest
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from sarthi import validate
 from sarthi.config import get_settings
-from sarthi.db import init_db, reset_engine, session
+from sarthi.db import session
 from sarthi.ingest.loader import check_file, data_health, esg_score_from_carbon, ingest, read_table
 from sarthi.ingest.schemas import IngestError
 from sarthi.models import Inbound, Location, RiskSignal, Sale, Sku, SkuSupplier, StockDaily, Supplier, Upload
-from sarthi.seed.generator import seed_database
 from sarthi.seed.samples import export_samples
-from tests.conftest import TEST_SEED, TEST_TODAY
+from tests.conftest import TEST_TODAY, must, private_database
 
 SAMPLE_TYPES = {
     "sku": "sku.csv", "locations": "locations.csv", "vendor": "vendor.xlsx", "sales": "sales.csv",
@@ -24,21 +22,12 @@ SAMPLE_TYPES = {
 
 
 @pytest.fixture(scope="module")
-def ingest_db(tmp_path_factory):
-    """These tests change data, so they get their own freshly seeded database and sample files."""
-    root = tmp_path_factory.mktemp("ingest")
-    previous = os.environ["SARTHI_DB_PATH"]
-    os.environ["SARTHI_DB_PATH"] = str(root / "ingest.db")
-    get_settings.cache_clear()
-    reset_engine()
-    init_db()
-    seed_database(TEST_SEED, today=TEST_TODAY)
-    samples = root / "samples"
-    export_samples(samples)
-    yield samples
-    reset_engine()
-    os.environ["SARTHI_DB_PATH"] = previous
-    get_settings.cache_clear()
+def ingest_db(tmp_path_factory, template_db):
+    """These tests change data, so they get their own copy of the seeded database, and sample files."""
+    with private_database(tmp_path_factory, template_db, "ingest", outbox=False) as root:
+        samples = root / "samples"
+        export_samples(samples)
+        yield samples
 
 
 def count(model) -> int:
@@ -73,9 +62,10 @@ def test_samples_round_trip_without_changing_the_demo_state(ingest_db):
     with session() as s:
         esg = dict(s.exec(select(Supplier.id, Supplier.esg_score)).all())
         defect = dict(s.exec(select(Supplier.id, Supplier.defect_rate)).all())
-        open_inbound = s.exec(select(Inbound).where(Inbound.received_on.is_(None))).all()
+        open_inbound = s.exec(select(Inbound).where(col(Inbound.received_on).is_(None))).all()
         primaries = s.exec(select(func.count()).select_from(SkuSupplier).where(SkuSupplier.is_primary)).one()
         butter = s.get(Sku, "SKU001")
+        assert butter is not None
     assert (count(Sale), count(StockDaily)) == (before_sales, before_stock)
     assert esg == {"SUP-REL": 82.0, "SUP-HUL": 74.0, "SUP-MCC": 61.0}
     assert defect == pytest.approx({"SUP-REL": 0.012, "SUP-HUL": 0.034, "SUP-MCC": 0.058})
@@ -112,7 +102,8 @@ def test_missing_required_column_is_a_hard_failure(ingest_db):
     with pytest.raises(IngestError, match="sku_id"):
         ingest("sales", "bad.csv", csv_bytes("Date,Qty\n2026-10-01,3"))
     with session() as s:
-        last = s.exec(select(Upload).order_by(Upload.id.desc())).first()
+        last = s.exec(select(Upload).order_by(col(Upload.id).desc())).first()
+        assert last is not None
     assert (last.type, last.status) == ("sales", "failed")
 
 
@@ -154,7 +145,7 @@ SKU012,Mystery Item,Unknown Category,10,
     result = ingest("sku", "new_skus.csv", data)
     assert (result["records"], result["dropped"]) == (2, 0)
     with session() as s:
-        bread, mystery = s.get(Sku, "SKU011"), s.get(Sku, "SKU012")
+        bread, mystery = must(s.get(Sku, "SKU011")), must(s.get(Sku, "SKU012"))
     assert (bread.cogs, bread.price, bread.lead_time_days, bread.aisle_id) == (32.0, 40.0, 2.0, "B")
     assert (bread.shelf_life_days, bread.holding_cost_pct, bread.moq) == (365, 0.03, 6)
     assert (mystery.aisle_id, mystery.lead_time_days) == ("F", 3.0)
@@ -179,7 +170,7 @@ SKU022,Second,Snacks,6
     assert result["records"] == 1
     assert result["dropped"] == 4
     with session() as s:
-        assert s.get(Sku, "SKU022").name == "Second"  # the later row wins
+        assert must(s.get(Sku, "SKU022")).name == "Second"  # the later row wins
         assert s.get(Sku, "SKU020") is None
 
 
@@ -193,14 +184,15 @@ def test_stock_upsert_and_transit(ingest_db):
     assert "Locations file first" in result["errors"][0]
     with session() as s:
         row = s.get(StockDaily, (TEST_TODAY, "SKU003", "STORE-01"))
-        inbound = s.exec(select(Inbound).where(Inbound.sku_id == "SKU003", Inbound.received_on.is_(None))).all()
+        assert row is not None
+        inbound = s.exec(select(Inbound).where(Inbound.sku_id == "SKU003", col(Inbound.received_on).is_(None))).all()
     assert row.on_hand == 500
     assert [(i.qty, i.supplier_id, i.expected_on) for i in inbound] == [(240, "SUP-MCC", TEST_TODAY + timedelta(days=5))]
 
     payload[0]["in_transit"] = 0  # the shipment arrived: transit back to zero removes the open inbound
     ingest("stock", "stock.json", json.dumps(payload[:1]).encode())
     with session() as s:
-        assert s.exec(select(Inbound).where(Inbound.sku_id == "SKU003", Inbound.received_on.is_(None))).all() == []
+        assert s.exec(select(Inbound).where(Inbound.sku_id == "SKU003", col(Inbound.received_on).is_(None))).all() == []
 
 
 def test_vendor_upload_creates_supplier_and_price_link(ingest_db):
@@ -211,7 +203,9 @@ def test_vendor_upload_creates_supplier_and_price_link(ingest_db):
     assert ingest("vendor", "vendor.xlsx", buffer.getvalue())["records"] == 1
     with session() as s:
         sup = s.get(Supplier, "SUP-NEW")
+        assert sup is not None
         link = s.get(SkuSupplier, ("SKU001", "SUP-NEW"))
+        assert link is not None
     assert (sup.tier, sup.avg_tat_days, sup.defect_rate) == ("Silver", 2.5, 0.003)
     assert (link.unit_price, link.is_primary) == (191.5, False)  # SKU001 already has a primary supplier
 
@@ -241,6 +235,7 @@ def test_locations_accept_geojson_and_xml(ingest_db):
     result = ingest("locations", "sites.xml", xml)
     with session() as s:
         hyd = s.get(Location, "WH-HYD")
+        assert hyd is not None
         assert s.get(Location, "WH-PUN") is None
     assert (hyd.city, hyd.lat, hyd.lon, hyd.capacity, hyd.kind) == ("Hyderabad", 17.39, 78.49, 1200, "warehouse")
     assert result["dropped"] == 1

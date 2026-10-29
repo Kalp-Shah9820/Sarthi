@@ -1,3 +1,4 @@
+import io
 import sys
 
 import typer
@@ -5,7 +6,7 @@ import uvicorn
 
 # Windows consoles default to a legacy code page that cannot print the rupee sign or Hindi text.
 for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
+    if isinstance(_stream, io.TextIOWrapper):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 app = typer.Typer(no_args_is_help=True)
@@ -47,6 +48,9 @@ def run(lead_mult: float = 1.0, demand_mult: float = 1.0, dry: bool = False, lan
     scenario = {"lead_mult": lead_mult, "demand_mult": demand_mult}
     run_id = asyncio.run(run_pipeline("cli", scenario=scenario, dry_run=dry, lang=lang.upper()))
     summary = run_summary(run_id)
+    if summary is None:                 # the run ended before it could record anything
+        typer.echo(f"run {run_id} left no summary")
+        raise typer.Exit(1)
     zones: dict[str, int] = {}
     for d in summary["decisions"].values():
         zones[d["zone"]] = zones.get(d["zone"], 0) + 1
@@ -68,6 +72,22 @@ def export_samples_cmd():
     init_db()
     paths = export_samples(BACKEND_ROOT / "samples")
     typer.echo("samples written: " + ", ".join(p.name for p in paths))
+
+
+@app.command()
+def backtest(days: int = 120, calibration: bool = True):
+    """Compare Sarthi's replenishment policy with a naive reorder rule, and check its risk figures against history."""
+    from sarthi.db import init_db
+    from sarthi.eval import backtest as bt
+
+    init_db()
+    try:
+        result = bt.run_backtest(days)
+        risk = bt.calibration(days) if calibration else None
+    except ValueError as exc:
+        typer.echo(f"Cannot run the backtest: {exc}")
+        raise typer.Exit(1) from exc
+    typer.echo(bt.format_report(result, risk))
 
 
 @app.command()

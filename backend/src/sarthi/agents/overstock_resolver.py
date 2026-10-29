@@ -12,7 +12,7 @@ sources; hubs holding less are the destinations. Replace `hub_demand_shares` whe
 import asyncio
 
 import numpy as np
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.agents.base import Agent
 from sarthi.agents.proposal import Proposal
@@ -104,7 +104,7 @@ class OverstockResolver(Agent):
         with session() as s:
             skus = {k.id: k.model_dump() for k in s.exec(select(Sku)).all()}
             locations = [x.model_dump() for x in s.exec(select(Location)).all()]
-            rows = s.exec(select(StockDaily).order_by(StockDaily.day)).all()
+            rows = s.exec(select(StockDaily).order_by(col(StockDaily.day))).all()
         latest: dict[tuple[str, str], float] = {}
         for r in rows:                                   # ordered by day, so the last write per pair is the newest
             latest[(r.sku_id, r.location_id)] = r.on_hand

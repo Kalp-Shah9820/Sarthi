@@ -5,55 +5,35 @@ look at the state straight after an action).
 """
 
 import asyncio
-import os
 import time
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
-from sarthi.agents import demand_intel
 from sarthi.agents.execution_engine import already_decided, recent_decisions
-from sarthi.api import presenters
 from sarthi.api.main import create_app
 from sarthi.api.routers import runs
 from sarthi.config import get_settings
-from sarthi.db import init_db, reset_engine, session
-from sarthi.llm import reset_llm
+from sarthi.db import session
 from sarthi.models import Alert, Event, Inbound, PurchaseOrder, Run, utcnow
 from sarthi.orchestrator.runner import run_pipeline
-from sarthi.seed.generator import seed_database
-from tests.conftest import TEST_SEED, TEST_TODAY
+from tests.conftest import must, private_database
 
 ENV = ("SARTHI_DB_PATH", "SARTHI_OUTBOX_PATH", "SARTHI_RERUN_AFTER_ACTION")
 
 
 @pytest.fixture(scope="module")
-def client(tmp_path_factory, analysis):
-    root = tmp_path_factory.mktemp("loop")
-    previous = {k: os.environ[k] for k in ENV}
-    os.environ.update(SARTHI_DB_PATH=str(root / "loop.db"), SARTHI_OUTBOX_PATH=str(root / "outbox"), SARTHI_RERUN_AFTER_ACTION="true")
-    get_settings.cache_clear()
-    reset_engine()
-    reset_llm()
-    presenters.reset()
-    init_db()
-    seed_database(TEST_SEED, today=TEST_TODAY)
-    saved_cache = dict(demand_intel._cache)
-    demand_intel._cache[demand_intel._fingerprint(get_settings())] = analysis
-    asyncio.run(run_pipeline("test"))
-    delay, runs.RERUN_DELAY_S = runs.RERUN_DELAY_S, 0.3
-    with TestClient(create_app()) as test_client:
-        yield test_client
-    runs.RERUN_DELAY_S = delay
-    demand_intel._cache.clear()
-    demand_intel._cache.update(saved_cache)
-    reset_engine()
-    os.environ.update(previous)
-    get_settings.cache_clear()
-    reset_engine()
-    reset_llm()
-    presenters.reset()
+def client(tmp_path_factory, template_db, analysis):
+    """A copy of the seeded database with one completed run, and the follow-up run switched on."""
+    with private_database(tmp_path_factory, template_db, "loop", analysis=analysis, env={"SARTHI_RERUN_AFTER_ACTION": "true"}):
+        asyncio.run(run_pipeline("test"))
+        delay, runs.RERUN_DELAY_S = runs.RERUN_DELAY_S, 0.3
+        try:
+            with TestClient(create_app()) as test_client:
+                yield test_client
+        finally:
+            runs.RERUN_DELAY_S = delay
 
 
 def boot(client) -> dict:
@@ -92,7 +72,7 @@ def alerts_of(run_id: int, status: str = "open") -> list[Alert]:
 
 def run_count() -> int:
     with session() as s:
-        return s.exec(select(func.count()).select_from(Run).where(Run.dry_run.is_(False))).one()
+        return s.exec(select(func.count()).select_from(Run).where(col(Run.dry_run).is_(False))).one()
 
 
 def test_an_order_re_runs_the_agents_and_the_screens_reflect_it(client):
@@ -105,10 +85,11 @@ def test_an_order_re_runs_the_agents_and_the_screens_reflect_it(client):
     after = wait_for_new_run(client, before["live"]["runId"])
     with session() as s:
         run = s.get(Run, after["live"]["runId"])
-        inbound = s.exec(select(func.sum(Inbound.qty)).where(Inbound.sku_id == row["id"], Inbound.received_on.is_(None))).one()
+        assert run is not None
+        inbound = s.exec(select(func.sum(Inbound.qty)).where(Inbound.sku_id == row["id"], col(Inbound.received_on).is_(None))).one()
     assert run.trigger == "action" and inbound >= qty
     # the agents now count the stock on order: they no longer ask for the same quantity again
-    again = [a for a in alerts_of(run.id) if a.sku_id == row["id"] and a.payload.get("kind") == "purchase"]
+    again = [a for a in alerts_of(must(run.id)) if a.sku_id == row["id"] and a.payload.get("kind") == "purchase"]
     assert all(a.payload["qty"] < qty for a in again), [a.payload["qty"] for a in again]
     # and the order is still in the audit trail, although a newer run has finished since
     assert any(r.json()["orderId"] in x["result"] for x in after["live"]["auditTrail"])
@@ -157,7 +138,8 @@ def test_a_dismissed_recommendation_is_not_raised_again(client):
     assert others & {a.payload.get("proposal_id") for a in alerts_of(run_id)}      # the rest are still raised
     with session() as s:
         note = s.exec(select(Event).where(Event.run_id == run_id, Event.kind == "action", Event.agent == "executionEngine")
-                      .order_by(Event.id.desc())).first()
+                      .order_by(col(Event.id).desc())).first()
+        assert note is not None
     assert "already decided and not repeated" in note.value["result"]
 
 
@@ -173,6 +155,7 @@ def test_an_approved_check_is_not_repeated_but_an_expired_decision_is_forgotten(
 
     with session() as s:                                    # as if it had been decided long ago
         stored = s.get(Alert, alert.id)
+        assert stored is not None
         stored.decided_at = utcnow().replace(year=utcnow().year - 1)
         s.add(stored)
         s.commit()
@@ -205,7 +188,7 @@ def test_a_chat_request_stays_on_the_list_across_runs(client):
     after = wait_for_new_run(client, start["live"]["runId"])
     assert made.id in [a["id"] for a in after["live"]["alerts"]]
     with session() as s:
-        assert s.get(Alert, made.id).run_id == after["live"]["runId"]
+        assert must(s.get(Alert, made.id)).run_id == after["live"]["runId"]
     orders = None
     with session() as s:
         orders = s.exec(select(func.count()).select_from(PurchaseOrder)).one()

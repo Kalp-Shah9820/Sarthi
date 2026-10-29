@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
+from typing import Any, cast
 
 import httpx
 from openai import AsyncOpenAI
@@ -95,13 +96,14 @@ class LlmGateway:
             return hit
         if self.mode != "llm" or not self._spend(run_id):
             return None
-        extra = {"response_format": response_format} if response_format else {}
+        extra: dict[str, Any] = {"response_format": response_format} if response_format else {}
         try:
             async with self._sem:
                 response = await self.client.chat.completions.create(
                     model=self.s.llm_model, temperature=TEMPERATURE,
                     max_tokens=max_tokens + self.s.llm_reasoning_headroom,
-                    messages=[{"role": "system", "content": system}, {"role": "user", "content": user}], **extra)
+                    messages=cast(Any, [{"role": "system", "content": system}, {"role": "user", "content": user}]),
+                    **extra)
             text = THINK.sub("", response.choices[0].message.content or "").strip()
         except Exception:  # noqa: BLE001  timeout, connection reset, malformed reply: the caller's fallback applies
             return None
@@ -115,8 +117,8 @@ class LlmGateway:
         """One uncached, unchecked completion. For diagnostics (the validator); agents use `json` and `text`."""
         return await self._chat(system, user, max_tokens=max_tokens, use_cache=False)
 
-    async def json(self, schema: type[BaseModel], system: str, user: str, *, fallback: Callable[[], BaseModel],
-                   run_id: int | None = None, max_tokens: int = 400, task: str = "json") -> BaseModel:
+    async def json[M: BaseModel, F](self, schema: type[M], system: str, user: str, *, fallback: Callable[[], F],
+                                    run_id: int | None = None, max_tokens: int = 400, task: str = "json") -> M | F:
         """Structured output validated against `schema`. Returns `fallback()` on any failure."""
         fmt = {"type": "json_schema",
                "json_schema": {"name": schema.__name__, "strict": True, "schema": schema.model_json_schema()}}

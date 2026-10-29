@@ -13,6 +13,9 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+
+from sqlmodel import col
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
@@ -80,9 +83,15 @@ def check_api() -> Result:
     from fastapi.testclient import TestClient
 
     from sarthi.api.main import create_app
+    from sarthi.config import get_settings
 
-    with TestClient(create_app()) as client:
-        r = client.get("/api/health")
+    settings = get_settings()
+    startup_run, settings.skip_startup_run = settings.skip_startup_run, True     # a check must not start (and then cut off) a run
+    try:
+        with TestClient(create_app()) as client:
+            r = client.get("/api/health")
+    finally:
+        settings.skip_startup_run = startup_run
     if r.status_code != 200 or r.json().get("status") != "ok":
         return Result("api", FAIL, f"/api/health returned {r.status_code}: {r.text[:120]}")
     return Result("api", PASS, f"/api/health -> {r.json()}")
@@ -173,7 +182,7 @@ def check_database() -> Result:
         deliveries = s.exec(select(func.count()).select_from(Delivery)).one()
         negative = s.exec(select(func.count()).select_from(StockDaily).where(StockDaily.on_hand < 0)).one()
         orphans = s.exec(
-            select(func.count()).select_from(Sale).where(Sale.sku_id.not_in(select(Sku.id)))
+            select(func.count()).select_from(Sale).where(col(Sale.sku_id).not_in(select(col(Sku.id))))
         ).one()
         latest = s.exec(select(func.max(StockDaily.day))).one()
     problems = []
@@ -207,7 +216,7 @@ def check_analytics() -> Result:
     sold = sales[sales["sku_id"] == sku_id].sort_values("day")["qty"].to_numpy()
     held = stock[stock["sku_id"] == sku_id].sort_values("day")["on_hand"].to_numpy()
     mu = weekday_mean_forecast(uncensor(sold, held), 30)
-    mc = montecarlo.simulate(float(held[-1]), [], mu, 8.0, np.array([5.0]), 500, montecarlo.sku_seed(1, sku_id))
+    mc = montecarlo.simulate(float(held[-1]), [], mu, 8.0, np.array([5.0]), 500, montecarlo.sku_seed(1, str(sku_id)))
     safety, rop = policy.reorder_point(mc.ltd, 0.95)
     with session() as s:
         names = dict(s.exec(select(Sku.id, Sku.name)).all())
@@ -319,13 +328,14 @@ def check_agents() -> Result:
     from sarthi.analytics.forecast import _fallback, uncensor
     from sarthi.blackboard.store import Blackboard
     from sarthi.config import get_settings
+    from sarthi.llm import get_llm
 
     settings = get_settings()
     sales, stock = data.store_frames()
     if sales.empty:
         return Result("agents", WARN, "no sales history; run `uv run sarthi seed`")
 
-    sentinel = MacroSentinel(Blackboard(VALIDATION_RUN_ID), None, settings, dict(BALANCED))
+    sentinel = MacroSentinel(Blackboard(VALIDATION_RUN_ID), get_llm(), settings, dict(BALANCED))      # no model call is made here
     suppliers, store, _, skus, uploaded = sentinel._master_data()
     lead_modifier, demand_multiplier = fuse(load_feeds(settings.feeds_dir) + uploaded, suppliers, store, skus)
 
@@ -333,7 +343,7 @@ def check_agents() -> Result:
     for sku_id, g in sales.sort_values("day").groupby("sku_id"):
         held = stock[stock["sku_id"] == sku_id].set_index("day")["on_hand"].reindex(g["day"]).to_numpy(dtype=float)
         sold = g["qty"].to_numpy(dtype=float)
-        forecasts[sku_id] = _fallback(sku_id, uncensor(sold, held), sold, 30, g["day"].iloc[-1])
+        forecasts[str(sku_id)] = _fallback(str(sku_id), uncensor(sold, held), sold, 30, g["day"].iloc[-1])
     ctx = Context(forecasts, {"sales": sales, "stock": stock, "as_of": sales["day"].max()})
     zones_found: Counter = Counter()
     missing = []
@@ -394,7 +404,7 @@ def check_resolve() -> Result:
     with session() as s:
         skus = {k.id: k.model_dump() for k in s.exec(select(Sku)).all()}
         hubs = [x.model_dump() for x in s.exec(select(Location).where(Location.kind == "warehouse")).all()]
-        rows = s.exec(select(StockDaily).order_by(StockDaily.day)).all()
+        rows = s.exec(select(StockDaily).order_by(col(StockDaily.day))).all()
     if not skus:
         return Result("resolve", WARN, "no products; run `uv run sarthi seed`")
     hub_ids = {h["id"] for h in hubs}
@@ -450,11 +460,12 @@ def check_orchestration() -> Result:
         return Result("orchestration", FAIL, "; ".join(problems))
 
     with session() as s:
-        last = s.exec(select(Run).where(Run.dry_run.is_(False)).order_by(Run.id.desc())).first()
+        last = s.exec(select(Run).where(col(Run.dry_run).is_(False)).order_by(col(Run.id).desc())).first()
         if last is None:
             return Result("orchestration", WARN, f"graph of {len(AGENT_CLASSES)} agents builds; no pipeline run yet (`uv run sarthi run`)")
         alerts = s.exec(select(func.count()).select_from(Alert).where(Alert.run_id == last.id)).one()
         open_alerts = s.exec(select(func.count()).select_from(Alert).where(Alert.run_id == last.id, Alert.status == "open")).one()
+    assert last.id is not None
     errors = len(Blackboard(last.id).events(kind="error"))
     detail = f"graph of {len(AGENT_CLASSES)} agents builds; last run #{last.id} {last.status}: {alerts} alerts ({open_alerts} open), {errors} agent errors"
     if last.status == "failed":
@@ -501,10 +512,10 @@ def check_performance() -> Result:
         for run_id in made:
             delete_run_events(run_id)
         with session() as s:
-            s.connection().execute(delete(Run).where(Run.id.in_(made)))
+            s.connection().execute(delete(Run).where(col(Run.id).in_(made)))
             s.commit()
-    if summary["status"] != "done":
-        return Result("performance", FAIL, "the pipeline did not complete: " + "; ".join(summary["errors"]))
+    if summary is None or summary["status"] != "done":
+        return Result("performance", FAIL, "the pipeline did not complete: " + "; ".join(summary["errors"] if summary else []))
     detail = (f"full pipeline, {len(summary['decisions'])} SKUs, {summary['proposals']} proposals: "
               f"{cold:.0f}s cold (budget {STAGE_BUDGET_S}s), {warm:.1f}s warm (budget {WARM_BUDGET_S}s)")
     if cold > STAGE_BUDGET_S or warm > WARM_BUDGET_S:
@@ -702,9 +713,34 @@ def check_frontend_wiring(root=None) -> Result:
                                            f"used by {pages} frontend files all exist on the backend")
 
 
+BACKTEST_CHECK_DAYS = 45
+
+
+def check_backtest() -> Result:
+    """mk12: the policy replay runs on the stored history and its books balance. A short window, a few seconds."""
+    from sarthi.eval import backtest as bt
+    from sarthi.orchestrator.runner import has_data
+
+    if not has_data():
+        return Result("backtest", WARN, "no data to replay (`uv run sarthi seed`)")
+    try:
+        result = bt.run_backtest(BACKTEST_CHECK_DAYS)
+    except ValueError as exc:
+        return Result("backtest", WARN, str(exc))
+    for row in result["skus"]:
+        for name in bt.POLICIES:
+            m = row[name]
+            if m["opening"] + m["received"] - m["sold"] != m["closing"] or not 0 < m["fill_rate"] <= 1:
+                return Result("backtest", FAIL, f"{row['id']} under the {name} policy: units are not conserved or fill rate is off")
+    naive, sarthi = result["totals"]["naive"], result["totals"]["sarthi"]
+    detail = (f"last {result['days']} days, {len(result['skus'])} products: Sarthi fills {sarthi['fill_rate']:.1%} of demand, "
+              f"the naive rule {naive['fill_rate']:.1%}; net ₹{sarthi['net'] - naive['net']:+,.0f} (`uv run sarthi backtest` for the full tables)")
+    return Result("backtest", PASS if sarthi["net"] >= naive["net"] else WARN, detail)
+
+
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api, check_nlq, check_frontend_wiring,
+    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api, check_nlq, check_frontend_wiring, check_backtest,
 ]
 
 
@@ -726,6 +762,19 @@ def _run_tool(name: str, cmd: list[str], cwd) -> Result:
     return Result(name, PASS, tail[:160])
 
 
+def check_types() -> Result:
+    """The same type checker the editor runs (Pyright, with the repository's pyrightconfig.json), over src and tests."""
+    from sarthi.config import BACKEND_ROOT
+
+    exe = shutil.which("pyright", path=str(Path(sys.executable).parent))
+    if exe is None:
+        return Result("types", WARN, "pyright is not installed (`uv sync` installs it with the dev tools)")
+    result = _run_tool("types", [exe], BACKEND_ROOT.parent)
+    if result.status == FAIL and " 0 errors" in f" {result.detail}":
+        return Result("types", PASS, result.detail)
+    return result
+
+
 def run(full: bool = False, frontend: bool = False, perf: bool = False) -> list[Result]:
     from sarthi.config import BACKEND_ROOT
 
@@ -740,6 +789,7 @@ def run(full: bool = False, frontend: bool = False, perf: bool = False) -> list[
     if full:
         results.append(_run_tool("ruff", [sys.executable, "-m", "ruff", "check", "src", "tests"], BACKEND_ROOT))
         results.append(_run_tool("pytest", [sys.executable, "-m", "pytest", "-q"], BACKEND_ROOT))
+        results.append(check_types())
     if frontend:
         npm = shutil.which("npm")
         if npm is None:

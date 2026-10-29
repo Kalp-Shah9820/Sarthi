@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 import numpy as np
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.agents.base import Agent
 from sarthi.analytics import montecarlo, par, policy, zones
@@ -52,7 +52,7 @@ def decide(inp: SkuInputs, settings, strategy: dict, paths: int, run_seed: int) 
     seed = montecarlo.sku_seed(run_seed, sku["id"])
     # Disruption also delays stock that is already on its way (to the nearest whole day, never before tomorrow).
     receipts = [(max(1, round(days * inp.lead_mult)) if days >= 1 else 0, qty) for days, qty in inp.receipts]
-    mc = montecarlo.simulate(inp.on_hand, receipts, inp.mu, inp.k, inp.lead_samples, paths, seed,
+    mc = montecarlo.simulate(inp.on_hand, montecarlo.arrival_index(receipts), inp.mu, inp.k, inp.lead_samples, paths, seed,
                              demand_mult=inp.demand_mult, lead_mult=inp.lead_mult)
 
     unit_margin = sku["price"] - sku["cogs"]
@@ -80,14 +80,15 @@ def decide(inp: SkuInputs, settings, strategy: dict, paths: int, run_seed: int) 
     qty = 0
     if position < rop:
         qty = policy.order_quantity(inp.mu * inp.demand_mult, inp.k, lead_mean, settings.review_period_days, sl, position,
-                                    sku["moq"], sku["shelf_life_days"], inp.supplier.get("capacity_limit") or None, seed)
+                                    sku["moq"], sku["shelf_life_days"], inp.supplier.get("capacity_limit") or None, seed,
+                                    safety_multiplier=multiplier)
 
     excess = par.excess_units(inp.on_hand, velocity, settings.overstock_cover_days)
     return {
         "sku_id": sku["id"], "zone_raw": zone_raw, "on_hand": int(inp.on_hand), "inbound": int(sum(q for _, q in receipts)),
         "velocity": round(velocity, 2), "velocity_trend": round(inp.velocity_trend, 3),
         "doc": round(doc, 1), "cover": round(cover, 1), "lead_mean": round(lead_mean, 1), "lead_eff": round(lead_eff, 1),
-        "stockout_prob": round(mc.stockout_prob, 4), "expected_lost_units": round(mc.expected_lost_units, 1),
+        "stockout_prob": round(mc.stockout_prob, 4), "safety_multiplier": round(multiplier, 4), "expected_lost_units": round(mc.expected_lost_units, 1),
         "service_level": round(sl, 3), "ss": int(safety), "rop": int(rop), "qty": int(qty),
         "par_shortage": round(shortage), "par_overstock": round(overstock), "par": par.profit_at_risk(shortage, overstock),
         "carry_roi": round(roi, 3), "excess_units": int(excess),
@@ -127,9 +128,9 @@ class Context:
         with session() as s:
             self.skus = [k.model_dump() for k in s.exec(select(Sku).order_by(Sku.id)).all()]
             suppliers = {x.id: x.model_dump() for x in s.exec(select(Supplier).order_by(Supplier.id)).all()}
-            links = s.exec(select(SkuSupplier).order_by(SkuSupplier.is_primary.desc())).all()
-            deliveries = s.exec(select(Delivery.supplier_id, Delivery.sku_id, Delivery.expected_days, Delivery.actual_days,
-                                       Delivery.qty_ordered, Delivery.qty_received, Delivery.ordered_on)).all()
+            links = s.exec(select(SkuSupplier).order_by(col(SkuSupplier.is_primary).desc())).all()
+            deliveries = [(d.supplier_id, d.sku_id, d.expected_days, d.actual_days, d.qty_ordered, d.qty_received, d.ordered_on)
+                          for d in s.exec(select(Delivery)).all()]
             self.inbounds = s.exec(select(Inbound).where(Inbound.location_id == STORE_ID)).all()
             self.safety_pct = {p.target: p.value or 0.0 for p in s.exec(
                 select(Preference).where(Preference.directive == "safety_stock_pct", Preference.active)).all()}
@@ -164,14 +165,15 @@ class Context:
         SKU's, scaled by how fast this supplier is relative to the SKU's usual one) and applies the
         supplier's record of running early or late.
         """
-        own = self.lead_by_pair.get((supplier.get("id"), sku["id"]), [])
+        supplier_id = str(supplier.get("id", ""))
+        own = self.lead_by_pair.get((supplier_id, sku["id"]), [])
         if len(own) >= MIN_LEAD_SAMPLES:
             return np.array(own)
         promised = float(sku["lead_time_days"])
         usual = self.primary.get(sku["id"], {})
         if usual and supplier.get("id") != usual.get("id") and usual.get("avg_tat_days") and supplier.get("avg_tat_days"):
             promised *= supplier["avg_tat_days"] / usual["avg_tat_days"]
-        ratios = self.ratio_by_supplier.get(supplier.get("id"), [])
+        ratios = self.ratio_by_supplier.get(supplier_id, [])
         return np.array([promised * r for r in ratios]) if ratios else np.array([promised])
 
     def inputs(self, sku: dict, day: date, lead_modifier: dict, demand_multiplier: dict) -> SkuInputs | None:
@@ -212,7 +214,7 @@ def stored_history(first: date, last: date) -> dict[tuple[date, str], SkuSnapsho
     """Latest stored snapshot per (day, SKU) in a date range."""
     with session() as s:
         rows = s.exec(select(SkuSnapshot).where(SkuSnapshot.as_of >= first, SkuSnapshot.as_of <= last)
-                      .order_by(SkuSnapshot.run_id)).all()
+                      .order_by(col(SkuSnapshot.run_id))).all()
     return {(r.as_of, r.sku_id): r for r in rows}
 
 

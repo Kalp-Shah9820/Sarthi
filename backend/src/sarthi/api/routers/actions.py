@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz, process
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.agents import compliance_guardian
 from sarthi.agents import debate as debate_lines
@@ -85,8 +85,8 @@ def create_order(body: OrderIn) -> dict:
         primary_id = s.exec(select(SkuSupplier.supplier_id).where(SkuSupplier.sku_id == sku.id, SkuSupplier.is_primary)).first()
         usual = next((x for x in suppliers if x.id == primary_id), None)
         snapshot = s.exec(select(SkuSnapshot).where(SkuSnapshot.run_id == run_id, SkuSnapshot.sku_id == sku.id)
-                          .order_by(SkuSnapshot.as_of.desc())).first()
-        suggested = s.exec(select(Alert).where(Alert.run_id == run_id, Alert.sku_id == sku.id).order_by(Alert.id.desc())).all()
+                          .order_by(col(SkuSnapshot.as_of).desc())).first()
+        suggested = s.exec(select(Alert).where(col(Alert.run_id) == run_id, col(Alert.sku_id) == sku.id).order_by(col(Alert.id).desc())).all()
         orders = s.exec(select(PurchaseOrder).where(PurchaseOrder.status == "confirmed")).all()
 
     if body.esgIndex is not None:
@@ -136,7 +136,8 @@ def create_transfer(body: TransferIn) -> dict:
     result = execute_payload("transfer", {"from": body.fromId, "to": body.toId, "units": body.units},
                              sku_id=body.skuId, run_id=run_id, source="user")
     with session() as s:
-        moved = s.get(TransferOrder, result["txid"]).qty
+        order = s.get(TransferOrder, result["txid"])
+        moved = order.qty if order else 0
     presenters.bump()
     return {"transferId": result["txid"], "units": moved, "runStarted": runs.rerun_after_action()}
 
@@ -152,6 +153,6 @@ def launch_campaign(body: CampaignIn) -> dict:
     sku_ids = list(candidate.get("skuIds", []))
     execute_payload("campaign", {"type": candidate["type"], "target_zone": candidate["target"], "sku_ids": sku_ids,
                                  "discount_pct": candidate["discount"], "est_impact_value": candidate["estImpactValue"]},
-                    sku_id=sku_ids[0] if sku_ids else None, run_id=run_id, source="user")
+                    sku_id=sku_ids[0] if sku_ids else "", run_id=run_id, source="user")
     presenters.bump()
     return {"status": "live"}

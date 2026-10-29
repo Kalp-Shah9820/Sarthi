@@ -1,5 +1,8 @@
 """Phantom inventory: the stock ledger and the shelf disagree."""
 
+from collections.abc import Set as AbstractSet
+from datetime import date
+
 import pandas as pd
 
 WINDOW_DAYS = 14
@@ -18,7 +21,7 @@ def _longest_run(flags: list[bool]) -> int:
 
 def phantom_inventory(sales_daily: pd.DataFrame, stock_daily: pd.DataFrame,
                       expected: dict[str, float] | None = None,
-                      receipt_days: set[tuple[str, object]] | None = None) -> list[dict]:
+                      receipt_days: AbstractSet[tuple[str, date]] | None = None) -> list[dict]:
     """Flag SKUs whose last 14 days show one of two contradictions.
 
     - `sold_while_empty`: units sold on 2+ days that both opened and closed at zero recorded stock, with no
@@ -48,7 +51,7 @@ def phantom_inventory(sales_daily: pd.DataFrame, stock_daily: pd.DataFrame,
 
         idle = ((frame["close"] > 0) & (frame["qty"] == 0)).to_list()
         run = _longest_run(idle)
-        if run >= IDLE_RUN_DAYS and expected.get(sku_id, 0.0) >= MIN_EXPECTED_PER_DAY:
+        if run >= IDLE_RUN_DAYS and expected.get(str(sku_id), 0.0) >= MIN_EXPECTED_PER_DAY:
             out.append({"sku_id": sku_id, "kind": "idle_stock", "days": run,
                         "est_units": int(frame["close"].iloc[-1])})
     return out

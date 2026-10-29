@@ -25,6 +25,16 @@ def sku_seed(run_seed: int, sku_id: str) -> int:
     return zlib.crc32(f"{run_seed}:{sku_id}".encode())
 
 
+def arrival_index(receipts: list[tuple[int, float]]) -> list[tuple[int, float]]:
+    """(days until a delivery is expected, qty) -> (index of the simulated day it is on the shelf, qty).
+
+    The first simulated day is tomorrow, and a delivery expected tomorrow is there when the shop opens,
+    so "in 1 day" is index 0. Found by the calibration backtest: without this shift the simulation counted
+    every delivery a day late and reported near-certain stockouts on days a delivery was due the next morning.
+    """
+    return [(max(0, int(days) - 1), qty) for days, qty in receipts]
+
+
 def simulate(on_hand: float, receipts: list[tuple[int, float]], mu: np.ndarray, k: float,
              lead_samples: np.ndarray, n_paths: int, seed: int,
              demand_mult: float = 1.0, lead_mult: float = 1.0) -> McResult:

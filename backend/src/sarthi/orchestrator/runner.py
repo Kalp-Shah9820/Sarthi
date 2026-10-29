@@ -1,8 +1,9 @@
 """Runs the agent graph once and records the run."""
 
 import asyncio
+from typing import cast
 
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.blackboard.store import Blackboard, end_run
 from sarthi.config import get_settings
@@ -10,7 +11,7 @@ from sarthi.db import session
 from sarthi.llm import get_llm
 from sarthi.models import Run, Sku, StrategyPolicy, local_today, utcnow
 from sarthi.orchestrator.graph import build_agents, build_graph
-from sarthi.orchestrator.state import PHASE_OF
+from sarthi.orchestrator.state import PHASE_OF, RunState
 from sarthi.seed.catalog import DEFAULT_STRATEGY
 
 # One real run at a time; what-if runs queue separately so they never block a real run.
@@ -29,7 +30,7 @@ def _lock(dry_run: bool) -> asyncio.Lock:
 def active_strategy() -> dict:
     """The strategy in force: {mode, savingsPriority, safetyStockMultiplier, leadTimeBuffer}. Expired policies revert to Balanced."""
     with session() as s:
-        policy = s.exec(select(StrategyPolicy).where(StrategyPolicy.active).order_by(StrategyPolicy.id.desc())).first()
+        policy = s.exec(select(StrategyPolicy).where(StrategyPolicy.active).order_by(col(StrategyPolicy.id).desc())).first()
         if policy is not None and policy.expires_on is not None and policy.expires_on < local_today():
             policy.active = False
             s.add(policy)
@@ -47,7 +48,7 @@ def latest_run_id(dry_run: bool = False, status: str | None = "done") -> int | N
         query = select(Run.id).where(Run.dry_run == dry_run)
         if status:
             query = query.where(Run.status == status)
-        return s.exec(query.order_by(Run.id.desc())).first()
+        return s.exec(query.order_by(col(Run.id).desc())).first()
 
 
 def run_summary(run_id: int) -> dict | None:
@@ -67,6 +68,7 @@ def start_run(trigger: str, *, scenario: dict | None = None, dry_run: bool = Fal
         s.add(run)
         s.commit()
         s.refresh(run)
+        assert run.id is not None          # set by the database on commit
         return run.id
 
 
@@ -75,6 +77,8 @@ async def execute_run(run_id: int, *, lang: str = "EN") -> dict:
     settings, llm = get_settings(), get_llm()
     with session() as s:
         run = s.get(Run, run_id)
+        if run is None:
+            raise LookupError(f"run {run_id} not found")
         scenario, dry_run, strategy = dict(run.scenario or {}), run.dry_run, dict(run.strategy or {})
     bb = Blackboard(run_id)
     summary = {"run_id": run_id, "status": "running", "errors": [], "proposals": 0, "rulings": 0, "approved": 0,
@@ -83,7 +87,8 @@ async def execute_run(run_id: int, *, lang: str = "EN") -> dict:
         async with _lock(dry_run):
             await llm.probe()                   # opening or closing LM Studio takes effect on the next run
             graph = build_graph(build_agents(bb, llm, settings, strategy))
-            state = {"run_id": run_id, "dry_run": dry_run, "lang": lang, "scenario": scenario, "strategy": strategy}
+            state = cast(RunState, {"run_id": run_id, "dry_run": dry_run, "lang": lang, "scenario": scenario,
+                                    "strategy": strategy})
             phase = None
             async for update in graph.astream(state, stream_mode="updates"):
                 for node, out in update.items():
@@ -114,8 +119,9 @@ async def execute_run(run_id: int, *, lang: str = "EN") -> dict:
     finally:
         with session() as s:
             run = s.get(Run, run_id)
-            run.status, run.finished_at = summary["status"], utcnow()
-            s.add(run)
+            if run is not None:
+                run.status, run.finished_at = summary["status"], utcnow()
+                s.add(run)
             s.commit()
         _summaries[run_id] = summary
         if len(_summaries) > 50:

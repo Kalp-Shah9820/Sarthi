@@ -12,7 +12,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel
 from sqlalchemy import delete
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.agents.base import Agent
 from sarthi.analytics.transfer import haversine_km
@@ -197,7 +197,7 @@ class MacroSentinel(Agent):
 
     def _persist(self, fresh: list[dict], uploaded: list[dict]) -> None:
         with session() as s:
-            s.connection().execute(delete(RiskSignal).where(RiskSignal.source.in_(REPLACED_SOURCES)))
+            s.connection().execute(delete(RiskSignal).where(col(RiskSignal.source).in_(REPLACED_SOURCES)))
             for signal in fresh:
                 s.add(RiskSignal(
                     type=signal["type"], severity=signal["severity"], region_key=signal["region_key"], msg=signal["msg"],

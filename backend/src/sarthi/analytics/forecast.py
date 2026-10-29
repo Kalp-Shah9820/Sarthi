@@ -5,12 +5,18 @@ out-of-sample error and each SKU keeps its best. Sales on stockout days are corr
 zero sales with an empty shelf says nothing about demand.
 """
 
+import os
 import warnings
 from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
+
+# statsforecast compiles its models with numba; keep the compiled code on disk instead of compiling them
+# again in every process (and in every worker process of a parallel fit). Read when statsforecast is imported.
+os.environ.setdefault("NIXTLA_NUMBA_CACHE", "1")
 
 MIN_HISTORY = 90          # days needed before statistical models are fitted
 CV_HORIZON, CV_WINDOWS = 14, 6
@@ -114,6 +120,17 @@ def _fallback(sku_id: str, y: np.ndarray, sold: np.ndarray, horizon: int, last_d
     )
 
 
+def jobs(n_series: int) -> int:
+    """How many processes fit forecasts at once. Each product's models are fitted independently, so the
+    results do not depend on this (checked: identical forecasts with 1 and 10 processes); only the time does.
+    On Windows, worker processes re-import the calling script, so a script that sets this above 1 needs an
+    `if __name__ == "__main__":` guard."""
+    from sarthi.config import get_settings
+
+    wanted = get_settings().forecast_jobs
+    return max(1, min(n_series, wanted if wanted > 0 else (os.cpu_count() or 1)))
+
+
 def _statistical(series: dict[str, dict], horizon: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
     """Run cross-validation, the forecast and the monthly back-cast for all eligible SKUs at once."""
     from statsforecast import StatsForecast
@@ -124,7 +141,8 @@ def _statistical(series: dict[str, dict], horizon: int) -> tuple[pd.DataFrame, p
         ignore_index=True,
     )
     models = [_ets(), AutoTheta(season_length=7), SeasonalNaive(season_length=7), CrostonOptimized()]
-    sf = StatsForecast(models=models, freq="D", n_jobs=1)
+    workers = jobs(len(series))
+    sf = StatsForecast(models=models, freq="D", n_jobs=workers)
     cv = sf.cross_validation(df=df, h=CV_HORIZON, n_windows=CV_WINDOWS, step_size=CV_HORIZON)
     fc = sf.forecast(df=df, h=horizon)
 
@@ -137,15 +155,14 @@ def _statistical(series: dict[str, dict], horizon: int) -> tuple[pd.DataFrame, p
         # badly-off back-casts because the level is not updated between blocks.
         from statsforecast.models import AutoETS
 
-        sf_m = StatsForecast(models=[AutoETS(season_length=7, model="ZNA")], freq="D", n_jobs=1)
+        sf_m = StatsForecast(models=[AutoETS(season_length=7, model="ZNA")], freq="D", n_jobs=workers)
         back = sf_m.cross_validation(df=df, h=BLOCK_DAYS, n_windows=windows, step_size=BLOCK_DAYS)
 
-    def tidy(frame: pd.DataFrame | None) -> pd.DataFrame | None:
-        if frame is not None and "unique_id" not in frame.columns:
-            frame = frame.reset_index()
-        return frame
+    def tidy(frame: Any) -> pd.DataFrame:
+        frame = cast(pd.DataFrame, frame)        # statsforecast returns pandas frames for pandas input
+        return frame if "unique_id" in frame.columns else frame.reset_index()
 
-    return tidy(cv), tidy(fc), tidy(back)
+    return tidy(cv), tidy(fc), (tidy(back) if back is not None else None)
 
 
 def forecast_all(sales_daily: pd.DataFrame, stock_daily: pd.DataFrame, horizon: int = 30,
@@ -159,7 +176,7 @@ def forecast_all(sales_daily: pd.DataFrame, stock_daily: pd.DataFrame, horizon: 
     for sku_id, g in sales_daily.sort_values("day").groupby("sku_id", sort=True):
         held = stock_daily[stock_daily["sku_id"] == sku_id].set_index("day")["on_hand"].reindex(g["day"]).to_numpy(dtype=float)
         sold = g["qty"].to_numpy(dtype=float)
-        series[sku_id] = {"days": list(g["day"]), "sold": sold, "y": uncensor(sold, held)}
+        series[str(sku_id)] = {"days": list(g["day"]), "sold": sold, "y": uncensor(sold, held)}
 
     eligible = {k: v for k, v in series.items() if len(v["y"]) >= MIN_HISTORY}
     cv = fc = back = None
@@ -174,13 +191,13 @@ def forecast_all(sales_daily: pd.DataFrame, stock_daily: pd.DataFrame, horizon: 
     results: dict[str, ForecastResult] = {}
     for sku_id, s in series.items():
         y, sold, last_day = s["y"], s["sold"], s["days"][-1]
-        if cv is None or sku_id not in eligible:
+        if cv is None or fc is None or sku_id not in eligible:
             results[sku_id] = _fallback(sku_id, y, sold, horizon, last_day)
             continue
         cv_s = cv[cv["unique_id"] == sku_id]
         actual = cv_s["y"].to_numpy(dtype=float)
         scores = {m: wape(actual, np.clip(cv_s[m].to_numpy(dtype=float), 0, None)) for m in CANDIDATES}
-        best = min(scores, key=scores.get)
+        best = min(scores, key=lambda model: scores[model])
         fitted = np.clip(cv_s[best].to_numpy(dtype=float), 0, None)
         per_window = pd.DataFrame({"cutoff": cv_s["cutoff"].to_numpy(), "y": actual, "f": fitted}).groupby("cutoff").sum()
         daily = np.clip(fc[fc["unique_id"] == sku_id][best].to_numpy(dtype=float), 0, None)

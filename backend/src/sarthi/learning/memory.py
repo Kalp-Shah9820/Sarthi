@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 from rapidfuzz import fuzz, process
-from sqlmodel import select
+from sqlmodel import col, select
 
 from sarthi.blackboard.store import Blackboard
 from sarthi.db import session
@@ -39,15 +39,17 @@ def rule_based(text: str) -> PreferenceOut:
     t = text.strip()
     low = t.lower()
     number = re.search(r"(\d+(?:\.\d+)?)", low)
-    if m := re.search(r"(?:avoid|don'?t use|do not use|never use|stop using|no more)\s+(.+)", low):
+    if m := re.search(r"(?:avoid|don'?t use|do not use|never use|stop using|stop buying from|not buy from|no more orders from|no more)\s+(.+)", low):
         return PreferenceOut(scope="supplier", target=m.group(1).strip(" ."), directive="avoid_supplier", note=t)
     if m := re.search(r"(?:prefer|always use|use only|stick with)\s+(.+)", low):
         return PreferenceOut(scope="supplier", target=m.group(1).strip(" ."), directive="prefer_supplier", note=t)
-    if number and re.search(r"\b(max|maximum|at most|no more than|cap)\b", low) and "unit" in low:
+    if number and re.search(r"\b(max|maximum|at most|no more than|cap|under|below|less than|up to)\b", low) and "unit" in low:
         return PreferenceOut(scope="sku", directive="cap_qty", value=float(number.group(1)), note=t)
     if number and re.search(r"\b(keep|hold|at least|minimum)\b", low) and "day" in low:
         return PreferenceOut(scope="sku", directive="min_cover_days", value=float(number.group(1)), note=t)
-    if re.search(r"ask me|check with me|always ask|consult me|my approval|don'?t auto|no auto", low):
+    if (weeks := re.search(r"(\d+)\s*weeks?", low)) and re.search(r"\b(keep|hold|at least|minimum|on hand|of stock|of cover)\b", low):
+        return PreferenceOut(scope="sku", directive="min_cover_days", value=float(weeks.group(1)) * 7, note=t)
+    if re.search(r"ask me|check with me|always ask|consult me|my approval|don'?t auto|no auto|show me first|let me approve", low):
         return PreferenceOut(scope="sku", directive="no_auto", note=t)
     return PreferenceOut(directive="other", note=t)
 
@@ -64,6 +66,13 @@ def _resolve(name: str, choices: dict[str, str]) -> str | None:
     return found[2] if found else None
 
 
+def _mentioned(text: str, suppliers: dict[str, str]) -> str | None:
+    """The supplier whose short name ("Metro", "Reliance") appears as a word in the text, if exactly one does."""
+    words = set(re.findall(r"[a-z&]+", text.lower()))
+    found = [ident for ident, name in suppliers.items() if name.split(" ")[0].lower() in words]
+    return found[0] if len(found) == 1 else None
+
+
 def to_preference(parsed: PreferenceOut, alert_sku_id: str) -> Preference:
     """Attach the rule to a real supplier or SKU; a rule whose target cannot be found becomes a plain note."""
     with session() as s:
@@ -72,7 +81,7 @@ def to_preference(parsed: PreferenceOut, alert_sku_id: str) -> Preference:
     directive, scope, target = parsed.directive, parsed.scope, ""
     kind = TARGETED.get(directive)
     if kind == "supplier":
-        target = _resolve(parsed.target, suppliers) or ""
+        target = _resolve(parsed.target, suppliers) or _mentioned(parsed.note, suppliers) or ""     # the model often names none
         scope = "supplier"
     elif kind == "sku" or directive == "no_auto":
         target = _resolve(parsed.target, skus) or alert_sku_id      # "max 300 units" means the alert's product
@@ -114,7 +123,7 @@ def record_decision(alert: Alert, approved: bool) -> float:
     if remedy:                               # overstock remedies also learn which remedy is preferred
         bandit.record(f"{alert.zone}:{remedy}", approved)
     with session() as s:
-        latest = s.exec(select(Run.id).where(Run.dry_run.is_(False)).order_by(Run.id.desc())).first()
+        latest = s.exec(select(col(Run.id)).where(col(Run.dry_run).is_(False)).order_by(col(Run.id).desc())).first()
     bb = Blackboard(latest if latest is not None else alert.run_id)
     bb.put("rlhfArbiter", "execute", "rlhf_weight_update", f"{delta:+.2f}", tone="money")
     verb = "approved" if approved else "dismissed"

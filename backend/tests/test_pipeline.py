@@ -4,24 +4,24 @@ Uses its own database: a run with earned autonomy executes a transfer, which cha
 """
 
 import asyncio
-import os
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 
 import numpy as np
 import pytest
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from sarthi import validate
 from sarthi.agents import debate, demand_intel
 from sarthi.agents.arbiter import Arbiter
 from sarthi.blackboard.store import Blackboard
 from sarthi.config import get_settings
-from sarthi.db import init_db, reset_engine, session
+from sarthi.db import session
 from sarthi.learning import bandit
 from sarthi.learning import confidence as conf
 from sarthi.learning.memory import PreferenceOut, learn_from_decision, rule_based, to_preference
-from sarthi.llm import get_llm, reset_llm, templates
+from sarthi.llm import get_llm, templates
 from sarthi.llm.grounding import grounded
 from sarthi.models import (
     Alert,
@@ -34,17 +34,17 @@ from sarthi.models import (
     StrategyPolicy,
     TransferOrder,
 )
+from sarthi.nlq.strategy import StrategyMode
 from sarthi.orchestrator.graph import AGENT_CLASSES, build_agents, build_graph
 from sarthi.orchestrator.runner import active_strategy, latest_run_id, run_pipeline, run_summary
 from sarthi.orchestrator.state import PHASE_OF
 from sarthi.seed import catalog as cat
-from sarthi.seed.generator import seed_database
-from tests.conftest import TEST_SEED, TEST_TODAY
+from tests.conftest import TEST_TODAY, must, private_database
 
 
 def run(trigger="test", **kw) -> tuple[int, dict]:
     run_id = asyncio.run(run_pipeline(trigger, **kw))
-    return run_id, run_summary(run_id)
+    return run_id, must(run_summary(run_id))
 
 
 def count(model, *where) -> int:
@@ -62,25 +62,10 @@ def debate_of(run_id: int) -> list[Event]:
 
 
 @pytest.fixture(scope="module")
-def pipeline_db(tmp_path_factory, analysis):
-    """An identical seeded database of its own, with the session's forecast analysis reused for it."""
-    root = tmp_path_factory.mktemp("pipeline")
-    previous = {k: os.environ[k] for k in ("SARTHI_DB_PATH", "SARTHI_OUTBOX_PATH")}
-    os.environ.update(SARTHI_DB_PATH=str(root / "pipeline.db"), SARTHI_OUTBOX_PATH=str(root / "outbox"))
-    get_settings.cache_clear()
-    reset_engine()
-    reset_llm()
-    init_db()
-    seed_database(TEST_SEED, today=TEST_TODAY)
-    saved_cache = dict(demand_intel._cache)
-    demand_intel._cache[demand_intel._fingerprint(get_settings())] = analysis    # same data, so the same analysis holds
-    yield root
-    demand_intel._cache.clear()
-    demand_intel._cache.update(saved_cache)
-    reset_engine()
-    os.environ.update(previous)
-    get_settings.cache_clear()
-    reset_llm()
+def pipeline_db(tmp_path_factory, template_db, analysis):
+    """A copy of the seeded database of its own, with the session's forecast analysis reused for it."""
+    with private_database(tmp_path_factory, template_db, "pipeline", analysis=analysis) as root:
+        yield root
 
 
 @pytest.fixture(scope="module")
@@ -106,6 +91,7 @@ def test_a_run_completes_through_all_four_phases(first):
     assert [e.value["v"] for e in bb.events(kind="context") if e.key == "phase"] == ["sense", "decide", "resolve", "execute"]
     with session() as s:
         record = s.get(Run, run_id)
+        assert record is not None
     assert (record.status, record.trigger, record.dry_run) == ("done", "first", False) and record.finished_at is not None
     assert record.strategy["mode"] == "Balanced" and latest_run_id() == run_id
     assert {k: d["zone"] for k, d in summary["decisions"].items()} == cat.ZONE_TARGET
@@ -169,7 +155,7 @@ def test_borrowed_demand_objection_shrinks_the_order(first):
 
 def test_debate_and_alert_sentences_contain_only_known_numbers(first):
     for e in debate_of(first[0]):
-        assert grounded(e.text, e.value["facts"]), e.text
+        assert grounded(e.text or "", e.value["facts"]), e.text
     for a in alerts_of(first[0]):
         assert grounded(a.msg, a.payload["facts"]), a.msg
 
@@ -185,7 +171,7 @@ def test_every_debate_line_exists_in_both_languages():
 
 def test_hindi_run_debates_in_hindi(first):
     run_id, _ = run("hindi", dry_run=True, lang="HI")
-    text = " ".join(e.text for e in debate_of(run_id))
+    text = " ".join(e.text or "" for e in debate_of(run_id))
     assert "स्वीकृत" in text and "Approved" not in text
 
 
@@ -214,7 +200,7 @@ def test_a_tiny_budget_rejects_purchases(first, monkeypatch):
     assert any("BUDGET_CAP" in reasons for reasons in rejected.values())
     lines = debate_of(run_id)
     assert any(e.value["facts"].get("rule") == "BUDGET_CAP" and e.agent == "cfoAgent" for e in lines)
-    assert any(e.value["facts"].get("status") == "rejected" and "budget" in e.text for e in lines)
+    assert any(e.value["facts"].get("status") == "rejected" and "budget" in (e.text or "") for e in lines)
     assert summary["approved"] < first[1]["approved"]
 
 
@@ -227,7 +213,7 @@ def test_a_failing_agent_marks_the_run_failed_without_crashing(first, monkeypatc
     run_id, summary = run("broken", dry_run=True)
     assert summary["status"] == "failed" and any("history unreadable" in e for e in summary["errors"])
     with session() as s:
-        assert s.get(Run, run_id).status == "failed"
+        assert must(s.get(Run, run_id)).status == "failed"
     assert latest_run_id(dry_run=True) != run_id                 # a failed run is never treated as the latest result
 
 
@@ -275,11 +261,11 @@ def test_earned_autonomy_executes_automatically(first):
         assert len(auto) == 1 and len(summary["executed"]) == 1
         a = auto[0]
         assert (a.zone, a.type, a.status) == ("money", "transfer", "approved") and a.confidence >= 85
-        assert a.txid == summary["executed"][0] and a.txid.startswith("TRF-")
+        assert a.txid == summary["executed"][0] and must(a.txid).startswith("TRF-")
         assert count(TransferOrder) == 1 and count(PurchaseOrder) == 0
         assert all(x.status == "open" for x in alerts_of(run_id) if x.routed == "review")
         assert any(e.value["stance"] == "execute" for e in debate_of(run_id))
-        assert any("executing automatically" in e.text for e in debate_of(run_id))
+        assert any("executing automatically" in (e.text or "") for e in debate_of(run_id))
     finally:
         with session() as s:
             s.delete(s.get(BanditArm, "money:transfer"))
@@ -318,14 +304,14 @@ async def test_dismissal_updates_the_approval_rate_and_is_logged(first):
     alert = next(a for a in alerts_of(first[0]) if a.type == "cannibalization")
     key = conf.arm_key(alert.zone, alert.type)
     try:
-        result = await learn_from_decision(alert.id, approved=False, feedback=None, llm=get_llm())
+        result = await learn_from_decision(must(alert.id), approved=False, feedback=None, llm=get_llm())
         assert result == {"delta": pytest.approx(0.4 - 0.5), "preference": None, "target": None}
         assert bandit.get_arm(key) == (2.0, 3.0)
         with session() as s:
-            assert s.get(Alert, alert.id).status == "dismissed"
-        bb = Blackboard(latest_run_id())
+            assert must(s.get(Alert, alert.id)).status == "dismissed"
+        bb = Blackboard(must(latest_run_id()))
         assert bb.get("rlhf_weight_update") == "-0.10"
-        assert any(e.agent == "rlhfArbiter" and "dismissed" in e.text for e in bb.events(kind="action"))
+        assert any(e.agent == "rlhfArbiter" and "dismissed" in (e.text or "") for e in bb.events(kind="action"))
         with pytest.raises(LookupError):
             await learn_from_decision(999_999, True, None, get_llm())
     finally:
@@ -340,15 +326,16 @@ async def test_feedback_becomes_a_rule_the_next_run_obeys(first):
     lays = next(a for a in alerts_of(first[0]) if a.sku_id == "SKU003")
     assert lays.payload["supplier_id"] == "SUP-REL"
     try:
-        result = await learn_from_decision(lays.id, approved=False, feedback="avoid Reliance Metro", llm=get_llm())
+        result = await learn_from_decision(must(lays.id), approved=False, feedback="avoid Reliance Metro", llm=get_llm())
         assert (result["preference"], result["target"]) == ("avoid_supplier", "SUP-REL")
         with session() as s:
             stored = s.exec(select(Preference).where(Preference.directive == "avoid_supplier")).one()
-            assert (stored.target, stored.active) == ("SUP-REL", True) and s.get(Alert, lays.id).feedback == "avoid Reliance Metro"
-        await learn_from_decision(lays.id, approved=False, feedback="max 300 units", llm=get_llm())
+            assert (stored.target, stored.active) == ("SUP-REL", True) and must(s.get(Alert, lays.id)).feedback == "avoid Reliance Metro"
+        await learn_from_decision(must(lays.id), approved=False, feedback="max 300 units", llm=get_llm())
 
         run_id = await run_pipeline("after-feedback", dry_run=True)
         summary = run_summary(run_id)
+        assert summary is not None
         assert summary["status"] == "done"
         proposals = [e for e in debate_of(run_id) if e.value["stance"] == "propose" and "supplier" in e.value["facts"]]
         assert proposals and all(e.value["facts"]["supplier"] != "Reliance Metro WH" for e in proposals)
@@ -409,7 +396,7 @@ async def test_debate_rewording_is_opt_in(first):
     for flag, expected in ((False, 0), (True, 2)):                              # one proposal: a propose line and a ruling
         llm = Recorder()
         settings = get_settings().model_copy(update={"llm_reword_debate": flag})
-        result = await Arbiter(Blackboard(-7), llm, settings, {"mode": "Balanced"}).run(dict(state))
+        result = await Arbiter(Blackboard(-7), cast(Any, llm), settings, {"mode": "Balanced"}).run(dict(state))
         assert result["rulings"][0]["status"] == "approved" and result["rulings"][0]["confidence"] == 80
         assert llm.calls == expected
 
@@ -430,3 +417,106 @@ def test_validator_orchestration_check(first):
     result = validate.check_orchestration()
     assert result.status == validate.PASS, result.detail
     assert "last run" in result.detail
+
+
+# ── Invariants (plan mk12 §2) ────────────────────────────────────────────────
+
+def purchase_value(run_id: int) -> float:
+    """Value of every purchase the agents proposed in a run, before any objection or ruling."""
+    proposed = [e.value["facts"] for e in debate_of(run_id)
+                if e.value["stance"] == "propose" and e.value["facts"].get("key") in ("propose:stockout_reorder", "propose:supplier_switch")]
+    return sum(f["qty"] * f["unit_price"] for f in proposed)
+
+
+def with_strategy(mode: StrategyMode) -> tuple[int, dict]:
+    """A what-if run under `mode` (nothing stored or executed), leaving the strategy as it was found."""
+    from sarthi.nlq import strategy
+
+    strategy.apply_policy(strategy.PolicyOut(mode=mode, horizon_days=30), "test")
+    try:
+        return run(f"what-if {mode}", dry_run=True)
+    finally:
+        strategy.apply_policy(strategy.PolicyOut(mode="Balanced"), "test")
+
+
+def test_two_runs_on_the_same_data_decide_the_same(first):
+    one, a = run("repeat")
+    two, b = run("repeat")
+    assert a["decisions"] == b["decisions"]                 # zones, risks, quantities per product
+
+    def picture(run_id):
+        return sorted((x.sku_id, x.type, x.zone, x.confidence, x.routed, x.payload.get("qty"), x.payload.get("units"),
+                       x.payload.get("supplier_id"), x.payload.get("mode")) for x in alerts_of(run_id))
+
+    assert picture(one) == picture(two) and picture(one)
+    assert [e.text for e in debate_of(one)] == [e.text for e in debate_of(two)]
+
+
+def test_strategy_moves_stock_levels_in_the_promised_direction(first):
+    runs_by_mode = {mode: with_strategy(mode) for mode in ("Cash Flow", "Balanced", "Growth")}
+
+    def safety(mode):
+        metrics = Blackboard(runs_by_mode[mode][0]).metrics(key="decision")
+        return sum(m["ss"] for m in metrics)
+
+    def reorder_points(mode):
+        return sum(m["rop"] for m in Blackboard(runs_by_mode[mode][0]).metrics(key="decision"))
+
+    assert safety("Cash Flow") < safety("Balanced") < safety("Growth")
+    assert reorder_points("Cash Flow") < reorder_points("Balanced") < reorder_points("Growth")
+    cash, balanced, growth = (purchase_value(runs_by_mode[m][0]) for m in ("Cash Flow", "Balanced", "Growth"))
+    assert 0 < cash < balanced < growth, (cash, balanced, growth)     # spending proposals grow as the strategy loosens
+    print(f"\nproposed purchase value: Cash Flow ₹{cash:,.0f}, Balanced ₹{balanced:,.0f}, Growth ₹{growth:,.0f}")
+    # what-if runs leave nothing behind
+    assert all(count(Alert, Alert.run_id == runs_by_mode[m][0]) == 0 for m in runs_by_mode)
+    assert active_strategy()["mode"] == "Balanced"
+
+
+def test_transfers_conserve_stock(first):
+    from sarthi.agents.execution_engine import execute_payload
+    from sarthi.models import StockDaily
+
+    def totals() -> dict[str, int]:
+        with session() as s:
+            rows = s.exec(select(StockDaily).order_by(col(StockDaily.day))).all()
+        latest = {(r.sku_id, r.location_id): r.on_hand for r in rows}       # later days overwrite earlier ones
+        out: dict[str, int] = {}
+        for (sku_id, _), on_hand in latest.items():
+            out[sku_id] = out.get(sku_id, 0) + on_hand
+        return out
+
+    before = totals()
+    moves = [("SKU002", "WH-DEL", "WH-MUM", 40), ("SKU002", "WH-MUM", "WH-BLR", 25), ("SKU007", "WH-BLR", "WH-CHN", 10**6),
+             ("SKU004", "WH-CHN", "WH-DEL", 7), ("SKU002", "WH-BLR", "WH-DEL", 25), ("SKU004", "STORE-01", "WH-MUM", 3)]
+    for sku_id, source, target, units in moves:
+        execute_payload("transfer", {"from": source, "to": target, "units": units}, sku_id=sku_id, run_id=first[0], source="test")
+    assert totals() == before                               # units only move; the clamped over-ask included
+    assert count(TransferOrder) >= len(moves)
+
+
+def test_a_fresh_system_executes_nothing_on_its_own(first):
+    with session() as s:
+        for arm in s.exec(select(BanditArm)).all():         # no approval history at all
+            s.delete(arm)
+        s.commit()
+    orders, transfers = count(PurchaseOrder), count(TransferOrder)
+    run_id, summary = run("fresh")
+    raised = alerts_of(run_id)
+    assert raised and summary["executed"] == []
+    assert all(a.routed == "review" and a.status == "open" and a.txid is None for a in raised)
+    assert (count(PurchaseOrder), count(TransferOrder)) == (orders, transfers)
+    assert not any(e.value["stance"] == "execute" for e in debate_of(run_id))
+
+
+def test_a_supplier_rule_finds_its_supplier_in_the_managers_words(pipeline_db):
+    """Seen with the live model: it returns the right directive but leaves the supplier's name out."""
+    def made(note, directive="avoid_supplier", target=""):
+        parsed = PreferenceOut.model_validate({"scope": "global", "target": target, "directive": directive, "note": note})
+        p = to_preference(parsed, "SKU003")
+        return p.directive, p.target
+
+    assert made("Metro has let us down too often, we are done with them") == ("avoid_supplier", "SUP-MCC")
+    assert made("bring them in from Reliance whenever you can", "prefer_supplier") == ("prefer_supplier", "SUP-REL")
+    assert made("they have let us down too often") == ("other", "")                     # nobody named: a plain note
+    assert made("either Metro or Reliance, I do not mind") == ("other", "")             # two named: do not guess
+    assert made("anything", target="HUL Regional") == ("avoid_supplier", "SUP-HUL")     # a name the model did give still wins

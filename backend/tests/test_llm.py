@@ -1,5 +1,6 @@
 import os
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,11 +10,12 @@ from sqlmodel import select
 from sarthi import validate
 from sarthi.api.main import create_app
 from sarthi.blackboard.store import Blackboard, delete_run_events
-from sarthi.config import Settings, get_settings
+from sarthi.config import get_settings
 from sarthi.db import session
 from sarthi.llm import get_llm, prompts, reset_llm, templates
 from sarthi.llm.gateway import LlmGateway, cache_get
 from sarthi.models import LlmCache
+from tests.conftest import settings_without_env_file
 
 RUN = 9100
 FACTS = {"name": "Lays Classic 26g", "prob": 97, "qty": 1488}
@@ -44,6 +46,15 @@ class FakeCompletions:
         return reply(item)
 
 
+
+class ScriptedGateway(LlmGateway):
+    """The real gateway, with its HTTP client replaced by scripted replies."""
+
+    def use(self, *replies):
+        fake = FakeCompletions(*replies)
+        self.client = cast(Any, SimpleNamespace(chat=SimpleNamespace(completions=fake)))
+        return fake
+
 @pytest.fixture
 def gateway(db):
     """A gateway that believes the model is up, with the network replaced by a fake."""
@@ -52,15 +63,8 @@ def gateway(db):
             s.delete(row)
         s.commit()
     delete_run_events(RUN)
-    gw = LlmGateway(Settings(_env_file=None, llm_enabled=True, llm_max_calls_per_run=3))
+    gw = ScriptedGateway(settings_without_env_file(llm_enabled=True, llm_max_calls_per_run=3))
     gw.mode = "llm"
-
-    def use(*replies):
-        fake = FakeCompletions(*replies)
-        gw.client = SimpleNamespace(chat=SimpleNamespace(completions=fake))
-        return fake
-
-    gw.use = use
     yield gw
     delete_run_events(RUN)
 
@@ -72,9 +76,9 @@ def llm_events():
 # ── Offline behaviour ────────────────────────────────────────────────────────
 
 async def test_disabled_model_uses_fallbacks_without_any_call(db):
-    gw = LlmGateway(Settings(_env_file=None, llm_enabled=False))
+    gw = LlmGateway(settings_without_env_file(llm_enabled=False))
     fake = FakeCompletions()
-    gw.client = SimpleNamespace(chat=SimpleNamespace(completions=fake))
+    gw.client = cast(Any, SimpleNamespace(chat=SimpleNamespace(completions=fake)))
     assert await gw.probe() == "offline"
     assert await gw.json(Intent, "sys", "user", fallback=lambda: Intent(name="unknown")) == Intent(name="unknown")
     assert await gw.text("sys", "user", facts=FACTS, fallback="template text") == ("template text", "template")
@@ -82,7 +86,7 @@ async def test_disabled_model_uses_fallbacks_without_any_call(db):
 
 
 async def test_probe_reports_offline_when_nothing_listens(db):
-    gw = LlmGateway(Settings(_env_file=None, llm_enabled=True, llm_base_url="http://127.0.0.1:9/v1"))
+    gw = LlmGateway(settings_without_env_file(llm_enabled=True, llm_base_url="http://127.0.0.1:9/v1"))
     assert await gw.probe() == "offline"
 
 
@@ -167,10 +171,10 @@ async def test_thinking_block_is_stripped_from_a_real_answer(gateway):
 
 
 async def test_reasoning_headroom_is_added_to_the_token_limit(db):
-    gw = LlmGateway(Settings(_env_file=None, llm_enabled=True, llm_reasoning_headroom=2000))
+    gw = LlmGateway(settings_without_env_file(llm_enabled=True, llm_reasoning_headroom=2000))
     gw.mode = "llm"
     fake = FakeCompletions(GOOD)
-    gw.client = SimpleNamespace(chat=SimpleNamespace(completions=fake))
+    gw.client = cast(Any, SimpleNamespace(chat=SimpleNamespace(completions=fake)))
     await gw.text("sys", "headroom check", facts=FACTS, fallback="template", max_tokens=220)
     assert fake.requests[0]["max_tokens"] == 2220
 
@@ -191,7 +195,7 @@ async def test_identical_prompt_is_served_from_the_cache_even_offline(gateway):
 async def test_cache_is_per_model(gateway):
     gateway.use(GOOD)
     await gateway.text("sys", "prompt", facts=FACTS, fallback="template")
-    other = LlmGateway(Settings(_env_file=None, llm_enabled=True, llm_model="some/other-model"))
+    other = LlmGateway(settings_without_env_file(llm_enabled=True, llm_model="some/other-model"))
     assert await other.text("sys", "prompt", facts=FACTS, fallback="template") == ("template", "template")
 
 

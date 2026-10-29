@@ -152,3 +152,60 @@ uv run sarthi export-samples
 - `uv run sarthi backtest` prints both tables.
 - `backend/README.md` exists and its first-time setup works on a clean clone.
 - The mk11 screen checklist passes both online and offline.
+
+## Implementation notes (as built, 2026-10-10)
+
+Code: `eval/backtest.py`, `sarthi backtest`, `tests/test_backtest.py` (11 tests), `tests/test_llm_quality.py` (3 live-model checks), five invariant tests at the end of `tests/test_pipeline.py`, `backend/README.md`. Deviations from the text above:
+
+- **Test layout.** Now as in section 1 (see the follow-up below).
+- **Backtest demand.** The generator's true demand is used when the database still holds exactly the generated sales (`generator.true_demand`); after uploads, demand is estimated from sales as the agents do, and the report says which. Stock in transit at the start of the window is given to both policies. The naive rule orders only when no order is outstanding (without that it re-orders every day while waiting).
+- **Each policy sees only its own past**: its own sales and stock in the replay, not the history that really happened. Substitution between products is not modelled (demand is the same for both policies).
+- **Calibration** scores the chance of an empty shelf within the product's *shortest* lead time. Within that window nothing ordered later can arrive, so prediction and outcome describe the same event; a longer window let orders placed the next day "rescue" the shelf. The figure on the screens also allows for late deliveries, which cannot be scored against days on which no order was placed.
+- **Engine fix found by the calibration.** The risk simulation counted a delivery expected in d days as arriving on day d+1, so a product with a delivery due the next morning showed a near-certain stockout. `montecarlo.arrival_index` puts it on day d. All earlier tests, including the fixed zone expectations of mk6, still pass.
+- **Measured on the demo data (120 days, 10 products):** fill rate 97.6 % against 86.8 % for the naive rule, 20 empty-shelf days against 155, average stock ₹187K against ₹146K, net ₹76.7K better; no product where the naive rule did better. Calibration: 577 of 590 product-days fall in the 0-20 % row (predicted 0.3 %, came true 2.1 %); the other rows hold 2 to 6 days each and are reported as too thin to read.
+- **Monotone strategy.** Now strict (see the follow-up below).
+- **Live-model checks** (`SARTHI_TEST_LLM=1`): 10/10 reworded questions routed, 3/3 rewordings accepted by the number guard, 6/6 feedback sentences read correctly. The first measurement of feedback was 1 of 5: the prompt gave the model no definitions. `EXTRACT_PREFERENCE` now defines each directive with an example, more phrasings are caught without the model, and a supplier rule finds its supplier in the manager's words when the model names none.
+- **Validator**: `check_backtest` replays the last 45 days and checks that the books balance. `uv run sarthi validate --full --frontend` therefore covers all four quality gates.
+- **Not done here:** the mk11 screen checklist was re-run in headless Chrome during mk11 and its follow-up, not again in this milestone; the frontend is unchanged since.
+
+## Follow-up (2026-10-18): the four open issues
+
+**1. The intermittent "Windows fatal exception: access violation" is fixed.** A diagnostic (a Windows vectored
+exception handler that records the faulting module) caught it inside SciPy's HiGHS solver,
+`scipy/optimize/_highspy/_core.pyd`: a write to address 0x77, during a pipeline run. HiGHS keeps scheduler state
+per operating-system thread, and the agents called it (budget MILP, transfer LP) from short-lived worker threads.
+A stress test of 400 solves, each on a fresh thread, reproduced it: native fault reports in one run, and the
+process crashed outright (segmentation fault) in two more. `analytics/solver.py` now runs every HiGHS call on one
+long-lived thread. The same stress test through the project's own functions: five runs, 0 fault reports, every
+solve on the one solver thread. No fault report in any test run since.
+
+**2. The tests follow the layout of section 1.** `analytics/test_core.py` and `test_demand.py` were split into
+`test_montecarlo, test_policy, test_conformal, test_zones, test_topsis, test_transfer, test_budget, test_forecast,
+test_basket`, plus `test_esg` (shipping options) and `test_anomaly` (phantom inventory), which the list does not
+name. `agents/test_resolve.py` and `test_execute.py` are now `agents/test_resolve_execute.py`; the EXECUTE tests come
+last because they switch to a database of their own. `api/test_api.py` is now `test_bootstrap_contract, test_actions,
+test_sandbox, test_upload`, with the shared client in `tests/api/conftest.py` and the field lists in
+`tests/api/support.py`. The same 406 tests, nothing dropped (the count was checked before and after).
+
+**3. The strategy now changes how much is ordered, not only when.** The safety multiplier (Cash Flow 0.8, Growth
+1.5) also scales the part of the order-up-to level above expected demand, exactly as it scales safety stock in the
+reorder point (`policy.order_quantity(..., safety_multiplier=)`). Proposed purchase value is now strictly
+Cash Flow < Balanced < Growth, and the invariant test asserts it strictly. Balanced (1.0) is unchanged, so every
+earlier result on the default strategy is the same.
+
+**4. Test time.** The variation (2 to 6 minutes) came from fitting the forecasts, which is single-threaded CPU work
+whose speed follows the machine's load: the same fit took 22 s to 129 s on different runs, even a second fit in the
+same process. Windows power throttling was tested and is not the cause. What changed:
+- The seeded database is built once per session (`template_db`) and copied for every test module that needs its
+  own (`private_database`); it was re-seeded seven times.
+- The forecast analysis of the seeded data is kept on disk between sessions, keyed by a hash of the code and the
+  library versions it depends on (`.pytest_cache/sarthi`; `SARTHI_TEST_FRESH_FORECAST=1` forces a new fit).
+- Fitting in parallel processes (`SARTHI_FORECAST_JOBS`) was tried: identical forecasts, no speed-up on this
+  machine (22 s either way), so the default stays at one process.
+- Result: 248 s before, 102-108 s after on a run that refits, less when the analysis is cached.
+
+**Type checking.** Pyright (the checker inside the editor's Pylance) reported 695 errors with the repository's
+`pyrightconfig.json`; now 0 in `src` and `tests`. pandas type stubs were added as a dev dependency (they removed
+about 230 false reports); SQLModel columns in queries are wrapped in `col()`; values that may be missing are checked
+explicitly (a clear error in the code, `must()` or an `assert` in the tests); the model gateway's `json()` is generic,
+so it returns the schema it was given. `uv run sarthi validate --full` now includes a `types` check.

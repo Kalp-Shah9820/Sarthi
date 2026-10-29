@@ -9,7 +9,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 from sarthi.db import session
 from sarthi.ingest.loader import ESG_KG_PER_POINT
@@ -41,14 +41,14 @@ def export_samples(out_dir: Path) -> list[Path]:
         if not skus or last_day is None:
             raise RuntimeError("The database is empty. Run `uv run sarthi seed` first.")
         sales = s.exec(
-            select(Sale).where(Sale.day > last_day - timedelta(days=SALES_DAYS)).order_by(Sale.day, Sale.id)
+            select(Sale).where(Sale.day > last_day - timedelta(days=SALES_DAYS)).order_by(col(Sale.day), col(Sale.id))
         ).all()
         stock_day = s.exec(select(func.max(StockDaily.day))).one()
         stock = s.exec(select(StockDaily).where(StockDaily.day == stock_day).order_by(StockDaily.location_id, StockDaily.sku_id)).all()
         transit = {
             (sku_id, loc): qty for sku_id, loc, qty in s.exec(
                 select(Inbound.sku_id, Inbound.location_id, func.sum(Inbound.qty))
-                .where(Inbound.received_on.is_(None)).group_by(Inbound.sku_id, Inbound.location_id)
+                .where(col(Inbound.received_on).is_(None)).group_by(col(Inbound.sku_id), col(Inbound.location_id))
             ).all()
         }
         recent = dict(s.exec(
