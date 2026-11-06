@@ -23,6 +23,12 @@ from sarthi.models import Alert, Preference, Run, Sku, Supplier, utcnow
 MATCH_CUTOFF = 70
 TARGETED = {"avoid_supplier": "supplier", "prefer_supplier": "supplier", "cap_qty": "sku", "min_cover_days": "sku",
             "safety_stock_pct": "sku"}
+UPPER_LIMIT = re.compile(r"\b(max|maximum|at most|no more than|not more than|cap|up to|under|below|less than)\b")
+# "never let stock fall below 50 units" sets a floor, not a cap on the order
+STOCK_FLOOR = re.compile(r"\b(stock|inventory|on hand|shelf|shelves|level|fall|falls|drop|drops|dip|dips|go|goes|run|runs)\s+"
+                         r"(?:\w+\s+)?(under|below|less than)\b")
+SOMEONE_ELSE = re.compile(r"\b(?:someone|somebody|anyone|anybody)\s+else\b"
+                          r"|\b(?:another|a different|an alternative|other|alternative)\s+(?:one|supplier|distributor|vendor|source)s?\b")
 
 
 class PreferenceOut(BaseModel):
@@ -39,12 +45,14 @@ def rule_based(text: str) -> PreferenceOut:
     t = text.strip()
     low = t.lower()
     number = re.search(r"(\d+(?:\.\d+)?)", low)
-    if m := re.search(r"(?:avoid|don'?t use|do not use|never use|stop using|stop buying from|not buy from|no more orders from|no more)\s+(.+)", low):
+    # a limit in units comes first: "no more than 300 units from Metro" caps the order, it does not ban Metro
+    if number and "unit" in low and UPPER_LIMIT.search(low) and not STOCK_FLOOR.search(low):
+        return PreferenceOut(scope="sku", directive="cap_qty", value=float(number.group(1)), note=t)
+    if m := re.search(r"(?:avoid|don'?t use|do not use|never use|stop using|stop buying from|not buy from|no more orders from"
+                      r"|no more(?!\s+than))\s+(.+)", low):
         return PreferenceOut(scope="supplier", target=m.group(1).strip(" ."), directive="avoid_supplier", note=t)
     if m := re.search(r"(?:prefer|always use|use only|stick with)\s+(.+)", low):
         return PreferenceOut(scope="supplier", target=m.group(1).strip(" ."), directive="prefer_supplier", note=t)
-    if number and re.search(r"\b(max|maximum|at most|no more than|cap|under|below|less than|up to)\b", low) and "unit" in low:
-        return PreferenceOut(scope="sku", directive="cap_qty", value=float(number.group(1)), note=t)
     if number and re.search(r"\b(keep|hold|at least|minimum)\b", low) and "day" in low:
         return PreferenceOut(scope="sku", directive="min_cover_days", value=float(number.group(1)), note=t)
     if (weeks := re.search(r"(\d+)\s*weeks?", low)) and re.search(r"\b(keep|hold|at least|minimum|on hand|of stock|of cover)\b", low):
@@ -81,7 +89,11 @@ def to_preference(parsed: PreferenceOut, alert_sku_id: str) -> Preference:
     directive, scope, target = parsed.directive, parsed.scope, ""
     kind = TARGETED.get(directive)
     if kind == "supplier":
-        target = _resolve(parsed.target, suppliers) or _mentioned(parsed.note, suppliers) or ""     # the model often names none
+        target = _resolve(parsed.target, suppliers) or ""
+        if not target and directive == "prefer_supplier" and SOMEONE_ELSE.search(parsed.target or parsed.note.lower()):
+            directive = "avoid_supplier"    # "Metro keeps being late, prefer someone else": the one named is to be avoided
+        if not target:
+            target = _mentioned(parsed.note, suppliers) or ""       # the model often names none
         scope = "supplier"
     elif kind == "sku" or directive == "no_auto":
         target = _resolve(parsed.target, skus) or alert_sku_id      # "max 300 units" means the alert's product

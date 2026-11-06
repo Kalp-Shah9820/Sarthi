@@ -42,7 +42,7 @@ def analyse(settings) -> dict:
     aisles = {k.id: k.aisle_id for k in skus}
 
     external_file = settings.external_forecast_file
-    external = pd.read_csv(external_file) if external_file.exists() else None
+    external = pd.read_csv(external_file, dtype={"sku_id": str}) if external_file.exists() else None    # keeps "00123"
     forecasts = forecast_all(sales, stock, external=external)
 
     baskets = data.basket_frame()

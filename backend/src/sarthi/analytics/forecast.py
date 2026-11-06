@@ -14,10 +14,6 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-# statsforecast compiles its models with numba; keep the compiled code on disk instead of compiling them
-# again in every process (and in every worker process of a parallel fit). Read when statsforecast is imported.
-os.environ.setdefault("NIXTLA_NUMBA_CACHE", "1")
-
 MIN_HISTORY = 90          # days needed before statistical models are fitted
 CV_HORIZON, CV_WINDOWS = 14, 6
 BLOCK_DAYS, BLOCKS = 30, 12

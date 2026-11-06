@@ -148,7 +148,7 @@ def launch_campaign(body: CampaignIn) -> dict:
     run_id = _run_id()
     stored = Blackboard(run_id).metrics(key="campaigns")
     candidate = next((c for c in (stored[-1].get("items", []) if stored else []) if c["type"] == body.type), None)
-    if candidate is None:
+    if candidate is None or not candidate.get("skuIds"):      # the screen shows an empty card for each type
         raise HTTPException(status_code=404, detail=f"no '{body.type}' campaign is proposed")
     sku_ids = list(candidate.get("skuIds", []))
     execute_payload("campaign", {"type": candidate["type"], "target_zone": candidate["target"], "sku_ids": sku_ids,

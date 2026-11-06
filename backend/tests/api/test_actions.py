@@ -136,6 +136,17 @@ def test_transfer_moves_stock_between_warehouses(client):
     assert client.post("/api/transfers", json={"skuId": "NOPE", "fromId": source, "toId": target, "units": 5}).status_code == 404
 
 
+def test_writes_from_another_site_are_refused(client):
+    path = "/api/alerts/999999/dismiss"            # no such alert: an accepted request answers 404
+    assert client.post(path, headers={"Origin": "https://evil.example"}).status_code == 403
+    assert client.post(path, headers={"Origin": "null"}).status_code == 403
+    assert client.post(path, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    for origin in ("http://localhost:5173", "http://127.0.0.1:4173"):
+        assert client.post(path, headers={"Origin": origin}).status_code == 404, origin
+    assert client.post(path).status_code == 404                                       # curl, the CLI, tests
+    assert client.get("/api/health", headers={"Origin": "https://evil.example"}).status_code == 200   # reads are not writes
+
+
 def test_campaign_goes_live(client):
     proposed = boot(client)["live"]["campaigns"]
     assert proposed, "the seeded run should cost at least one campaign"

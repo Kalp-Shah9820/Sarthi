@@ -47,7 +47,13 @@ export default function CommandCenter() {
 
   const exportCsv = () => {
     const cols = ["id", "name", "cat", "zone", "stock", "daysStock", "vel", "risk", "par", "esg", "co2", "lastReorder", "decisionStatus", "supplier", "tier"];
-    const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    // Names and suppliers come from uploaded files: text that starts like a formula ("=HYPERLINK(...)") would run
+    // in Excel, so it gets a leading apostrophe. Numbers (including negative ones) are left as they are.
+    const cell = (v) => {
+      const text = String(v ?? "");
+      const safe = typeof v !== "number" && /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
     const csv = [cols.join(","), ...filteredData.map(s => cols.map(c => cell(s[c])).join(","))].join("\r\n");
     const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");

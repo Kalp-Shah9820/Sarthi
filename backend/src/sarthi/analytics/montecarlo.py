@@ -38,7 +38,13 @@ def arrival_index(receipts: list[tuple[int, float]]) -> list[tuple[int, float]]:
 def simulate(on_hand: float, receipts: list[tuple[int, float]], mu: np.ndarray, k: float,
              lead_samples: np.ndarray, n_paths: int, seed: int,
              demand_mult: float = 1.0, lead_mult: float = 1.0) -> McResult:
-    """`mu`: mean demand per day from today; `receipts`: (day index, qty) already on order, day 0 = today."""
+    """Risk until a new order placed today would arrive.
+
+    `on_hand`: today's closing stock. `mu`: mean demand per day, starting tomorrow (simulated day index 0).
+    `receipts`: (days until it is expected, qty) for stock already on order; see `arrival_index`.
+    `lead_samples`: days a new order takes. The window covers the L days up to and including the arrival day,
+    the same L days of demand that the reorder point covers (`policy.reorder_point` uses this `ltd`).
+    """
     rng = np.random.default_rng(seed)
     horizon = len(mu)
     m = np.maximum(np.asarray(mu, dtype=float) * demand_mult, 1e-9)
@@ -46,7 +52,7 @@ def simulate(on_hand: float, receipts: list[tuple[int, float]], mu: np.ndarray, 
     lead = np.clip(np.ceil(rng.choice(np.asarray(lead_samples, dtype=float), size=n_paths) * lead_mult), 1, horizon)
     lead = lead.astype(int)
     inflow = np.zeros(horizon)
-    for day, qty in receipts:
+    for day, qty in arrival_index(receipts):
         if 0 <= day < horizon:
             inflow[day] += qty
     level = on_hand + np.cumsum(inflow)[None, :] - np.cumsum(demand, axis=1)       # end-of-day stock

@@ -34,7 +34,8 @@ export function SarthiProvider({ children }) {
     let tries = 0;
     const tick = async () => {
       await refreshData();
-      if (live.online && live.runId === before && ++tries < 20) setTimeout(tick, 3000);
+      // a failed refresh counts as a try but does not stop the polling: the run's results are still to come
+      if (live.runId === before && ++tries < 20) setTimeout(tick, 3000);
     };
     setTimeout(tick, 2500);
   }, [refreshData]);

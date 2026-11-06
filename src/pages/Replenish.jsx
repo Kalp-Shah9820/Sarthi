@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { distributors, live, skuData, zoneInfo } from "../data/appData.js";
 import { api } from "../api/client.js";
@@ -49,6 +49,24 @@ function Replenish() {
   const [campaignLaunched, setCampaignLaunched] = useState(() =>
     campaignTemplates.map((c, i) => (live.campaigns?.find(x => x.type === c.type)?.status === "live" ? i : -1)).filter(i => i >= 0));
   const critical = skuData.filter(d => (d.stockoutProb ?? d.risk)>60);
+  const inFlight = useRef(null);                       // the action being sent; a second click is ignored until it answers
+  const [busy, setBusy] = useState(null);
+  const [actionError, setActionError] = useState(null);  // the action the backend did not carry out
+
+  // Send an order, transfer or campaign. Returns the answer, {} when no backend is connected (the page then
+  // shows its built-in result, as before), or undefined when the click was ignored or the backend said no.
+  const sendAction = async (key, send) => {
+    if (inFlight.current) return undefined;
+    inFlight.current = key;
+    setBusy(key);
+    setActionError(null);
+    const r = await send();
+    inFlight.current = null;
+    setBusy(null);
+    if (r) return r;
+    if (live.online) { setActionError(key); return undefined; }
+    return {};
+  };
 
   // live data from the backend, each falling back to this page's own constants
   const whList = live.warehouses ?? warehouses;
@@ -165,7 +183,7 @@ function Replenish() {
 
   // Handle proceed from confirmation
   const handleProceed = async () => {
-    if (!confirmModal) return;
+    if (!confirmModal || inFlight.current) return;
     const sku = skuData.find(s => s.id === confirmModal.skuId);
     const dist = distributors[confirmModal.distIdx];
     const units = orderUnits[confirmModal.skuId] || (sku.recommendedQty ?? Math.round(sku.vel * sku.lead * 1.3));
@@ -174,14 +192,36 @@ function Replenish() {
     // (It used to be opened with "noopener", for which the browser returns no window to write the receipt into.)
     const receiptWindow = window.open("", "_blank");
     if (receiptWindow) receiptWindow.opener = null;
-    const r = await api.post("/orders", { skuId: sku.id, distributor: dist.name, units, price, esgIndex: selectedEsg });
-    downloadReceipt(sku, dist, units, price, r?.orderId, receiptWindow);
+    const r = await sendAction("order", () => api.post("/orders", { skuId: sku.id, distributor: dist.name, units, price, esgIndex: selectedEsg }));
+    if (r === undefined) { if (receiptWindow) receiptWindow.close(); return; }     // no order was placed: no receipt
+    downloadReceipt(sku, dist, units, price, r.orderId, receiptWindow);
     setOrderSuccess({ sku, dist, units, price });
     setConfirmModal(null);
     setDraftOrder(null);
     refreshData();
-    if (r?.runStarted) refreshAfterRun();
+    if (r.runStarted) refreshAfterRun();
   };
+
+  const handleTransfer = async () => {
+    const t = transferModal;
+    const r = await sendAction("transfer", () => api.post("/transfers", { skuId: t.skuId, fromId: t.from.id, toId: t.to.id, units: t.units }));
+    if (r === undefined) return;
+    setTransferSuccess({ ...t, units: r.units ?? t.units, id: r.transferId });    // the units actually moved
+    setTransferModal(null);
+    refreshData();
+    if (r.runStarted) refreshAfterRun();
+  };
+
+  const handleCampaign = async (camp, i) => {
+    const r = await sendAction(`campaign:${i}`, () => api.post("/campaigns", { type: camp.type }));
+    if (r === undefined) return;
+    setCampaignLaunched(prev => [...prev, i]);
+    refreshData();
+  };
+
+  const notSaved = (key) => actionError === key && (
+    <div style={{ marginTop:10, fontFamily:"'DM Mono'", fontSize:11, color:C.chaos, textAlign:"center" }}>{i18n[lang].actionNotSaved}</div>
+  );
 
   return (
     <div>
@@ -286,7 +326,7 @@ function Replenish() {
                   .replace("{price}", price)}
               </div>
               <div style={{ display:"flex", gap:12, justifyContent:"center" }}>
-                <button onClick={() => setConfirmModal(null)} style={{
+                <button onClick={() => { setConfirmModal(null); setActionError(null); }} style={{
                   background:"transparent", color:C.muted, border:`1px solid ${C.border}`,
                   borderRadius:10, padding:"12px 32px", fontFamily:"'Inter'", fontWeight:600,
                   fontSize:16, cursor:"pointer", transition:"all 0.2s"
@@ -296,18 +336,19 @@ function Replenish() {
                 >
                   {i18n[lang].declineLabel}
                 </button>
-                <button onClick={handleProceed} style={{
+                <button onClick={handleProceed} disabled={busy === "order"} style={{
                   background:C.sweet, color:C.bg, border:"none", borderRadius:10,
                   padding:"12px 32px", fontFamily:"'Inter'", fontWeight:700, fontSize:16,
-                  cursor:"pointer", transition:"all 0.2s",
-                  boxShadow:`0 4px 16px ${C.sweet}44`
+                  cursor: busy === "order" ? "wait" : "pointer", transition:"all 0.2s",
+                  boxShadow:`0 4px 16px ${C.sweet}44`, opacity: busy === "order" ? 0.6 : 1
                 }}
-                  onMouseEnter={e => e.currentTarget.style.opacity="0.9"}
-                  onMouseLeave={e => e.currentTarget.style.opacity="1"}
+                  onMouseEnter={e => { if (busy !== "order") e.currentTarget.style.opacity="0.9"; }}
+                  onMouseLeave={e => { if (busy !== "order") e.currentTarget.style.opacity="1"; }}
                 >
                   {i18n[lang].proceedLabel}
                 </button>
               </div>
+              {notSaved("order")}
             </div>
           </div>
         );
@@ -736,17 +777,19 @@ function Replenish() {
                 .replace("{to}", transferModal.to.name)}
             </div>
             <div style={{ display:"flex", gap:12, justifyContent:"center" }}>
-                <button onClick={() => setTransferModal(null)} style={{
+                <button onClick={() => { setTransferModal(null); setActionError(null); }} style={{
                 background:"transparent", color:C.muted, border:`1px solid ${C.border}`,
                 borderRadius:10, padding:"12px 28px", fontFamily:"'Inter'", fontWeight:600,
                 fontSize:14, cursor:"pointer"
               }}>{i18n[lang].back}</button>
-              <button onClick={async () => { const t = transferModal; const r = await api.post("/transfers", { skuId: t.skuId, fromId: t.from.id, toId: t.to.id, units: t.units }); setTransferSuccess({ ...t, id: r?.transferId }); setTransferModal(null); refreshData(); if (r?.runStarted) refreshAfterRun(); }} style={{
+              <button onClick={handleTransfer} disabled={busy === "transfer"} style={{
                 background:C.sweet, color:C.bg, border:"none", borderRadius:10,
                 padding:"12px 28px", fontFamily:"'Inter'", fontWeight:700, fontSize:14,
-                cursor:"pointer", boxShadow:`0 4px 16px ${C.sweet}44`
+                cursor: busy === "transfer" ? "wait" : "pointer", boxShadow:`0 4px 16px ${C.sweet}44`,
+                opacity: busy === "transfer" ? 0.6 : 1
               }}>{i18n[lang].done} ✓</button>
             </div>
+            {notSaved("transfer")}
           </div>
         </div>
       )}
@@ -824,14 +867,16 @@ function Replenish() {
                     ✓ {i18n[lang].campaignLive}
                   </div>
                 ) : (
-                  <button onClick={() => { setCampaignLaunched(prev => [...prev, i]); api.post("/campaigns", { type: camp.type }); }} style={{
+                  <button onClick={() => handleCampaign(camp, i)} disabled={busy === `campaign:${i}`} style={{
                     width:"100%", background:zColor, color:C.bg, border:"none",
                     borderRadius:8, padding:"10px", fontFamily:"'Inter'", fontWeight:700,
-                    fontSize:13, cursor:"pointer", transition:"all 0.2s"
+                    fontSize:13, cursor: busy === `campaign:${i}` ? "wait" : "pointer", transition:"all 0.2s",
+                    opacity: busy === `campaign:${i}` ? 0.6 : 1
                   }}>
                     {i18n[lang].launchCampaignAction}
                   </button>
                 )}
+                {!launched && notSaved(`campaign:${i}`)}
               </div>
             );
           })}

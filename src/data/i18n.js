@@ -1,5 +1,6 @@
 ﻿export const rawI18n = {
   EN: {
+    actionNotSaved: "Not saved: the backend refused this or did not answer. Nothing was changed; try again.",
     commandCenter: "Command Center", inventoryHealth: "Inventory Health", replenishHub: "Replenishment Hub",
     storeViz: "Store Walkthrough", intelligence: "Intelligence Layer", alerts: "Alerts & Approvals",
     sandbox: "What-If War Room", askIntel: "Ask Sarthi", profitAtRisk: "Profit at Risk",

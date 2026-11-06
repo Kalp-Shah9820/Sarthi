@@ -23,6 +23,7 @@ from sarthi.config import get_settings
 from sarthi.db import session
 from sarthi.models import Delivery, Inbound, Sku, SkuSupplier
 from sarthi.seed import generator
+from sarthi.seed.catalog import STORE_ID
 
 MIN_HISTORY_DAYS = 56          # history a policy needs before the replay starts
 LOOKBACK_DAYS = 112            # how far back the Sarthi policy looks each day
@@ -63,7 +64,7 @@ def load_series(days: int, truth_seed: int | None = None) -> tuple[list[Series],
         skus = {k.id: k for k in s.exec(select(Sku).order_by(Sku.id)).all()}
         primary = {x.sku_id: x.supplier_id for x in s.exec(select(SkuSupplier).where(SkuSupplier.is_primary)).all()}
         deliveries = s.exec(select(Delivery)).all()
-        inbounds = s.exec(select(Inbound)).all()
+        inbounds = s.exec(select(Inbound).where(Inbound.location_id == STORE_ID)).all()     # the replay is of the store's shelf
     if sales.empty or stock.empty:
         raise ValueError("the database has no sales history; run `uv run sarthi seed` first")
 
@@ -111,18 +112,23 @@ def naive_policy(series: Series, sold: list[float], stock: list[float], on_hand:
     return math.ceil(velocity * lead * NAIVE_FACTOR / moq) * moq
 
 
+def weekday_dispersion(y: np.ndarray) -> float:
+    """Demand dispersion around each weekday's own mean (weekly swings are not randomness)."""
+    recent = np.asarray(y, dtype=float)[-MIN_HISTORY_DAYS:]
+    weekday_means = np.array([recent[i % 7::7].mean() for i in range(7)])
+    return dispersion(recent, weekday_means[np.arange(len(recent)) % 7])
+
+
 def sarthi_policy(series: Series, sold: list[float], stock: list[float], on_hand: float, pending: list, settings) -> int:
     """The agents' rule: forecast, simulate lead-time demand, order up to the newsvendor service level."""
     sku = series.sku
     y = uncensor(np.array(sold[-LOOKBACK_DAYS:]), np.array(stock[-LOOKBACK_DAYS:]))
     mu = weekday_mean_forecast(y, 30)
-    recent = y[-MIN_HISTORY_DAYS:]
-    weekday_means = np.array([recent[i % 7::7].mean() for i in range(7)])
-    k = dispersion(recent, weekday_means[np.arange(len(recent)) % 7])
+    k = weekday_dispersion(y)
     seed = _seed(settings.seed, sku.id, f"replay{len(sold)}")
-    today = len(sold) - len(series.sold) + len(series.lead_draws)            # replay day index
-    receipts = [(max(1, expected - today), float(qty)) for _, qty, expected in pending]
-    mc = montecarlo.simulate(on_hand, montecarlo.arrival_index(receipts), mu, k, series.lead_pool, REPLAY_PATHS, seed)
+    today = len(sold) - 1 - (len(series.sold) - len(series.lead_draws))    # replay day index t: `sold` ends with day t
+    receipts = [(max(1, expected - today), float(qty)) for _, qty, expected in pending]    # days until it is expected
+    mc = montecarlo.simulate(on_hand, receipts, mu, k, series.lead_pool, REPLAY_PATHS, seed)
     level = policy.service_level(sku.price - sku.cogs, sku.cogs, sku.holding_cost_pct, sku.shelf_life_days,
                                  settings.review_period_days, settings.goodwill_factor)
     _, reorder_point = policy.reorder_point(mc.ltd, level)
@@ -218,8 +224,10 @@ def calibration(days: int = 120) -> dict:
     as_of = max(stock["day"])
     stand_ins = {}
     for sku_id, frame in sales.groupby("sku_id"):          # dispersion from before the window only: no hindsight
-        y = frame.sort_values("day")["qty"].to_numpy(dtype=float)[: -days][-MIN_HISTORY_DAYS:]
-        k = dispersion(y, np.full(len(y), y.mean())) if len(y) >= 14 else 5.0
+        merged = frame.merge(stock[stock["sku_id"] == sku_id][["day", "on_hand"]], on="day", how="left").sort_values("day")
+        sold, shelf = merged["qty"].to_numpy(dtype=float)[: -days], merged["on_hand"].fillna(1).to_numpy(dtype=float)[: -days]
+        # as the agents do: empty-shelf days corrected, then dispersion around each weekday's own mean
+        k = weekday_dispersion(uncensor(sold, shelf)) if len(sold) >= 14 else 5.0
         stand_ins[sku_id] = SimpleNamespace(dispersion_k=k, model="weekday", wape=0.0)
     ctx = Context(stand_ins, {"sales": sales, "stock": stock, "as_of": as_of})
 
@@ -237,7 +245,9 @@ def calibration(days: int = 120) -> dict:
             horizon = max(1, math.floor(float(np.min(inp.lead_samples))))
             if idx + horizon >= len(held):
                 continue                    # what happened next is not on record yet
-            mc = montecarlo.simulate(inp.on_hand, montecarlo.arrival_index(inp.receipts), inp.mu, inp.k, np.array([float(horizon)]),
+            # observed: the shelf ended a day empty (held == 0). With whole units that is demand >= stock, i.e. the
+            # simulated level <= 0; one unit less on hand turns the simulator's "level < 0" into exactly that event.
+            mc = montecarlo.simulate(inp.on_hand - 1, inp.receipts, inp.mu, inp.k, np.array([float(horizon)]),
                                      CALIBRATION_PATHS, _seed(settings.seed, sku["id"], f"cal{idx}"))
             points.append((float(mc.stockout_prob), bool((held[idx + 1: idx + 1 + horizon] == 0).any())))
 

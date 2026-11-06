@@ -12,6 +12,25 @@ function Alerts() {
   const [dismissed, setDismissed] = useState([]);
   const [approved, setApproved] = useState(() => (live.alerts ?? []).filter(a => a.status === "approved").map(a => a.id));
   const [feedback, setFeedback] = useState({});
+  const [pending, setPending] = useState([]);       // decisions sent, answer not back yet
+  const [failed, setFailed] = useState([]);         // decisions the backend did not save
+
+  // Connected: show the decision only once the backend has saved it. On the built-in sample alerts
+  // (no backend) there is nothing to save, so the decision shows at once, as before.
+  const decide = async (alert, verb) => {
+    const show = () => (verb === "approve" ? setApproved : setDismissed)(prev => [...prev, alert.id]);
+    if (!live.online || !live.alerts) { show(); return; }
+    if (pending.includes(alert.id)) return;
+    setPending(prev => [...prev, alert.id]);
+    setFailed(prev => prev.filter(id => id !== alert.id));
+    const body = { feedback: feedback[alert.id] };
+    const r = await (verb === "approve" ? api.post(`/alerts/${alert.id}/approve`, body) : api.post(`/alerts/${alert.id}/dismiss`, body));
+    setPending(prev => prev.filter(id => id !== alert.id));
+    if (!r) { setFailed(prev => [...prev, alert.id]); refreshData(); return; }   // e.g. already decided elsewhere: show the current state
+    show();
+    refreshData();
+    if (r.runStarted) refreshAfterRun();
+  };
 
   const all = (live.alerts ?? [
     { id: 1, sku: "Lays Classic 26g", zone: "chaos", risk: 84, confidence: 94, msg: i18n[lang].alert1msg, action: i18n[lang].alert1action, impact: i18n[lang].alert1impact },
@@ -61,7 +80,8 @@ function Alerts() {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {all.map(alert => {
           const z = zoneInfo[alert.zone];
-          const isApproved = approved.includes(alert.id);
+          const isApproved = approved.includes(alert.id) || alert.status === "approved";
+          const isPending = pending.includes(alert.id);
           const confColor = alert.confidence >= 85 ? C.sweet : alert.confidence >= 70 ? C.money : C.chaos;
           
           return (
@@ -101,11 +121,13 @@ function Alerts() {
               {!isApproved ? (
                 <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                    <button 
-                    onClick={() => { setApproved(prev => [...prev, alert.id]); api.post(`/alerts/${alert.id}/approve`, { feedback: feedback[alert.id] }).then(r => { if (r) { refreshData(); if (r.runStarted) refreshAfterRun(); } }); }}
-                    style={{ 
-                        flex: 1, background: z.color, color: C.bg, border: "none", 
-                        borderRadius: 12, padding: "12px 24px", fontFamily: "'Sora'", 
-                        fontWeight: 700, fontSize: 14, cursor: "pointer", transition: "all 0.2s" 
+                    onClick={() => decide(alert, "approve")}
+                    disabled={isPending}
+                    style={{
+                        flex: 1, background: z.color, color: C.bg, border: "none",
+                        borderRadius: 12, padding: "12px 24px", fontFamily: "'Sora'",
+                        fontWeight: 700, fontSize: 14, cursor: isPending ? "wait" : "pointer", transition: "all 0.2s",
+                        opacity: isPending ? 0.6 : 1
                     }}
                     onMouseEnter={e => e.currentTarget.style.opacity = 0.9}
                     onMouseLeave={e => e.currentTarget.style.opacity = 1}
@@ -113,10 +135,11 @@ function Alerts() {
                      {alert.action}
                    </button>
                    <button 
-                    onClick={() => { setDismissed(prev => [...prev, alert.id]); api.post(`/alerts/${alert.id}/dismiss`, { feedback: feedback[alert.id] }); }}
-                    style={{ 
-                        background: "transparent", border: `1px solid ${C.border}`, color: C.muted, 
-                        borderRadius: 12, padding: "12px 20px", fontSize: 14, cursor: "pointer" 
+                    onClick={() => decide(alert, "dismiss")}
+                    disabled={isPending}
+                    style={{
+                        background: "transparent", border: `1px solid ${C.border}`, color: C.muted,
+                        borderRadius: 12, padding: "12px 20px", fontSize: 14, cursor: isPending ? "wait" : "pointer"
                     }}
                    >
                      {i18n[lang].dismiss}
@@ -127,7 +150,13 @@ function Alerts() {
                     style={{ flex: 1, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 20px", fontSize: 12, color: C.text, outline: "none" }}
                    />
                 </div>
-              ) : (
+              ) : null}
+              {!isApproved && failed.includes(alert.id) && (
+                <div style={{ marginTop: 10, fontSize: 12, color: C.chaos, fontFamily: "'DM Mono'" }}>
+                  {i18n[lang].actionNotSaved}
+                </div>
+              )}
+              {!isApproved ? null : (
                 <div style={{ 
                     background: C.sweet + "22", border: `1px solid ${C.sweet}44`, 
                     borderRadius: 12, padding: "14px 20px", display: "flex", 

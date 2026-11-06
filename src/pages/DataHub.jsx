@@ -26,7 +26,7 @@ export default function DataHub() {
   const [activeUploadId, setActiveUploadId] = useState(null);
 
   const handleCardClick = (id) => {
-    if (uploads[id]?.status === "done" || uploads[id]?.status === "uploading") return;
+    if (uploads[id]?.status === "uploading") return;    // a finished card can take a newer or corrected file
     setActiveUploadId(id);
     if (fileInputRef.current) fileInputRef.current.click();
   };
@@ -41,17 +41,17 @@ export default function DataHub() {
   // send the file to the backend; offline, the simulated upload below is used
   const startUpload = async (id, file) => {
     if (!live.online) { simulateUpload(id); return; }
-    if (uploads[id]?.status === "done") return;
+    const earlier = uploads[id];
     setUploads(prev => ({ ...prev, [id]: { progress: 0, status: "uploading" } }));
     const r = await api.upload(`/datahub/upload/${id}`, file, (p) => setUploads(prev => ({ ...prev, [id]: { ...prev[id], progress: Math.min(p, 95) } })));
     setUploads(prev => r
       ? ({ ...prev, [id]: { progress: 100, status: "done", records: r.records, time: r.time } })
-      : (({ [id]: _failed, ...rest }) => rest)(prev));      // failed upload: the card returns to its empty state
+      : earlier?.status === "done"
+        ? ({ ...prev, [id]: earlier })                      // failed replacement: the earlier upload still stands
+        : (({ [id]: _failed, ...rest }) => rest)(prev));    // failed first upload: the card returns to its empty state
   };
 
   const simulateUpload = (id) => {
-    if (uploads[id]?.status === "done") return;
-    
     setUploads(prev => ({ ...prev, [id]: { progress: 0, status: "uploading" } }));
     
     let p = 0;
@@ -74,7 +74,15 @@ export default function DataHub() {
     setSyncing(true);
     const run = live.online ? await api.post("/runs") : null;
     if (run) {                                          // watch the pipeline run, then show its results
-      api.stream(`/runs/${run.runId}/stream`, () => {}, async () => { await refreshData(); setSyncing(false); });
+      api.stream(`/runs/${run.runId}/stream`, () => {}, async (complete) => {
+        // the connection broke before the run said "done": keep checking until the run's results are in
+        for (let tries = 0; !complete && tries < 100; tries++) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          complete = (await refreshData()) && live.runId >= run.runId;
+        }
+        await refreshData();
+        setSyncing(false);
+      });
       return;
     }
     setTimeout(() => {

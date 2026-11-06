@@ -41,10 +41,12 @@ export default function Sandbox() {
 
   // ask the backend for the real numbers shortly after the sliders stop moving
   useEffect(() => {
+    let current = true;                               // false once the sliders have moved on: a late answer is dropped
     const t = setTimeout(async () => {
-      setSim(await api.post("/sandbox/simulate", { lead, demand, stock, margin }));
+      const r = await api.post("/sandbox/simulate", { lead, demand, stock, margin });
+      if (current) setSim(r);
     }, 250);
-    return () => clearTimeout(t);
+    return () => { current = false; clearTimeout(t); };
   }, [lead, demand, stock, margin]);
 
   // and let the agents debate the scenario

@@ -116,6 +116,6 @@ def test_a_delivery_expected_tomorrow_is_on_the_shelf_tomorrow():
     assert montecarlo.arrival_index([(1, 50.0), (3, 20.0), (0, 5.0)]) == [(0, 50.0), (2, 20.0), (0, 5.0)]
     mu = np.full(30, 20.0)
     lead = np.array([3.0])
-    late = montecarlo.simulate(0, [(1, 500.0)], mu, 8.0, lead, 400, 1)                      # arrives a day after it is needed
-    on_time = montecarlo.simulate(0, montecarlo.arrival_index([(1, 500.0)]), mu, 8.0, lead, 400, 1)
+    on_time = montecarlo.simulate(0, [(1, 500.0)], mu, 8.0, lead, 400, 1)                   # simulate shifts it itself
+    late = montecarlo.simulate(0, [(2, 500.0)], mu, 8.0, lead, 400, 1)                      # a day after it is needed
     assert late.stockout_prob > 0.95 and on_time.stockout_prob < 0.05

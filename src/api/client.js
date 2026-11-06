@@ -27,12 +27,14 @@ export const api = {
   put: (path, body = {}) => request("PUT", path, body),
 
   // multipart upload with real progress (fetch cannot report upload progress)
-  upload(path, file, onProgress) {
+  upload(path, file, onProgress, timeoutMs = 120000) {
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest();
       const form = new FormData();
       form.append("file", file);
       xhr.open("POST", BASE + path);
+      xhr.timeout = timeoutMs;                        // a stalled upload ends instead of waiting forever
+      xhr.ontimeout = () => resolve(null);
       xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress((e.loaded / e.total) * 100); };
       xhr.onload = () => {
         try { resolve(xhr.status < 300 ? JSON.parse(xhr.responseText) : null); } catch { resolve(null); }
@@ -42,14 +44,15 @@ export const api = {
     });
   },
 
-  // server-sent events; returns a function that closes the stream
+  // server-sent events; returns a function that closes the stream.
+  // onDone(true) after the server's "done" event; onDone(false) when the connection broke first.
   stream(path, onMessage, onDone) {
     const es = new EventSource(BASE + path);
     let finished = false;
-    const close = () => { es.close(); if (!finished) { finished = true; if (onDone) onDone(); } };
+    const close = (complete) => { es.close(); if (!finished) { finished = true; if (onDone) onDone(complete); } };
     es.onmessage = (e) => { try { onMessage(JSON.parse(e.data)); } catch { /* ignore malformed line */ } };
-    es.addEventListener("done", close);
-    es.onerror = close;
+    es.addEventListener("done", () => close(true));
+    es.onerror = () => close(false);
     return () => { finished = true; es.close(); };
   },
 };

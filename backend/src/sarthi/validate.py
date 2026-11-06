@@ -717,7 +717,8 @@ BACKTEST_CHECK_DAYS = 45
 
 
 def check_backtest() -> Result:
-    """mk12: the policy replay runs on the stored history and its books balance. A short window, a few seconds."""
+    """mk12: the policy replay runs on the stored history and its books balance. A short window, a few seconds,
+    but it replays every product and regenerates the seed data to compare against, so it runs only with --full."""
     from sarthi.eval import backtest as bt
     from sarthi.orchestrator.runner import has_data
 
@@ -730,7 +731,7 @@ def check_backtest() -> Result:
     for row in result["skus"]:
         for name in bt.POLICIES:
             m = row[name]
-            if m["opening"] + m["received"] - m["sold"] != m["closing"] or not 0 < m["fill_rate"] <= 1:
+            if m["opening"] + m["received"] - m["sold"] != m["closing"] or not 0 <= m["fill_rate"] <= 1:   # 0: nothing sold
                 return Result("backtest", FAIL, f"{row['id']} under the {name} policy: units are not conserved or fill rate is off")
     naive, sarthi = result["totals"]["naive"], result["totals"]["sarthi"]
     detail = (f"last {result['days']} days, {len(result['skus'])} products: Sarthi fills {sarthi['fill_rate']:.1%} of demand, "
@@ -740,7 +741,7 @@ def check_backtest() -> Result:
 
 CHECKS: list[Callable[[], Result]] = [
     check_dependencies, check_imports, check_config, check_api, check_llm, check_database, check_ingest,
-    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api, check_nlq, check_frontend_wiring, check_backtest,
+    check_analytics, check_agent_core, check_agents, check_resolve, check_orchestration, check_http_api, check_nlq, check_frontend_wiring,
 ]
 
 
@@ -787,6 +788,10 @@ def run(full: bool = False, frontend: bool = False, perf: bool = False) -> list[
     if perf:
         results.append(check_performance())
     if full:
+        try:
+            results.append(check_backtest())
+        except Exception as exc:
+            results.append(Result("backtest", FAIL, f"{type(exc).__name__}: {exc}"))
         results.append(_run_tool("ruff", [sys.executable, "-m", "ruff", "check", "src", "tests"], BACKEND_ROOT))
         results.append(_run_tool("pytest", [sys.executable, "-m", "pytest", "-q"], BACKEND_ROOT))
         results.append(check_types())

@@ -8,6 +8,7 @@ history so the drift time-lapse has real data from the first run.
 import asyncio
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import Any
 
 import numpy as np
 from sqlmodel import col, select
@@ -52,7 +53,7 @@ def decide(inp: SkuInputs, settings, strategy: dict, paths: int, run_seed: int) 
     seed = montecarlo.sku_seed(run_seed, sku["id"])
     # Disruption also delays stock that is already on its way (to the nearest whole day, never before tomorrow).
     receipts = [(max(1, round(days * inp.lead_mult)) if days >= 1 else 0, qty) for days, qty in inp.receipts]
-    mc = montecarlo.simulate(inp.on_hand, montecarlo.arrival_index(receipts), inp.mu, inp.k, inp.lead_samples, paths, seed,
+    mc = montecarlo.simulate(inp.on_hand, receipts, inp.mu, inp.k, inp.lead_samples, paths, seed,
                              demand_mult=inp.demand_mult, lead_mult=inp.lead_mult)
 
     unit_margin = sku["price"] - sku["cogs"]
@@ -129,8 +130,11 @@ class Context:
             self.skus = [k.model_dump() for k in s.exec(select(Sku).order_by(Sku.id)).all()]
             suppliers = {x.id: x.model_dump() for x in s.exec(select(Supplier).order_by(Supplier.id)).all()}
             links = s.exec(select(SkuSupplier).order_by(col(SkuSupplier.is_primary).desc())).all()
-            deliveries = [(d.supplier_id, d.sku_id, d.expected_days, d.actual_days, d.qty_ordered, d.qty_received, d.ordered_on)
-                          for d in s.exec(select(Delivery)).all()]
+            # only the columns used, not whole rows (select() is typed for at most four columns, hence the list)
+            columns: list[Any] = [col(Delivery.supplier_id), col(Delivery.sku_id), col(Delivery.expected_days),
+                                  col(Delivery.actual_days), col(Delivery.qty_ordered), col(Delivery.qty_received),
+                                  col(Delivery.ordered_on)]
+            deliveries = [tuple(row) for row in s.exec(select(*columns)).all()]
             self.inbounds = s.exec(select(Inbound).where(Inbound.location_id == STORE_ID)).all()
             self.safety_pct = {p.target: p.value or 0.0 for p in s.exec(
                 select(Preference).where(Preference.directive == "safety_stock_pct", Preference.active)).all()}

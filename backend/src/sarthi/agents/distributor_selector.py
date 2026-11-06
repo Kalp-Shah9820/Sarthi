@@ -116,7 +116,8 @@ class DistributorSelector(Agent):
         def exposure(mode_days: int) -> tuple[float, float]:
             """Stockout risk and lost margin until an order shipped this way would arrive."""
             eta = max(1, round(candidate["lead_days"] + mode_days - BASE_MODE_DAYS))
-            mc = montecarlo.simulate(inp.on_hand, [*montecarlo.arrival_index(receipts), (eta, float(qty))], inp.mu, inp.k, np.array([float(eta)]),
+            # only stock already on its way: the window ends when this order arrives, so it adds nothing before then
+            mc = montecarlo.simulate(inp.on_hand, receipts, inp.mu, inp.k, np.array([float(eta)]),
                                      MODE_PATHS, seed, demand_mult=inp.demand_mult)
             return mc.stockout_prob, par.par_shortage(mc.expected_lost_units, unit_margin, self.settings.goodwill_factor)
 

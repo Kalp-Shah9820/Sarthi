@@ -286,6 +286,27 @@ def test_feedback_phrases_are_understood_without_the_model():
     assert rule_based("looks fine, thanks").model_dump(include={"directive", "note"}) == {"directive": "other", "note": "looks fine, thanks"}
 
 
+def test_a_quantity_limit_is_not_read_as_a_supplier_rule_or_a_floor():
+    limit = rule_based("No more than 300 units from Metro")
+    assert (limit.directive, limit.value) == ("cap_qty", 300.0)                  # a cap, not a ban on Metro
+    assert rule_based("keep orders under 200 units").directive == "cap_qty"
+    assert rule_based("no more Metro").directive == "avoid_supplier"
+    for floor in ("Never let stock fall below 50 units", "Don't let inventory go under 40 units"):
+        assert rule_based(floor).directive == "other", floor                     # a minimum, not a maximum: the model reads it
+
+
+def test_preferring_someone_else_avoids_the_supplier_named(pipeline_db):
+    def made(text):
+        p = to_preference(rule_based(text), "SKU003")
+        return p.directive, p.target
+
+    assert made("Metro keeps being late, prefer someone else") == ("avoid_supplier", "SUP-MCC")
+    assert made("Metro is slow, use another supplier") == ("other", "")          # no pattern: left to the model
+    parsed = PreferenceOut(directive="prefer_supplier", note="Metro keeps being late, find another supplier")
+    assert (to_preference(parsed, "SKU003").directive, to_preference(parsed, "SKU003").target) == ("avoid_supplier", "SUP-MCC")
+    assert made("always use Reliance") == ("prefer_supplier", "SUP-REL")
+
+
 def test_preferences_attach_to_real_suppliers_and_skus(pipeline_db):
     avoid = to_preference(PreferenceOut(scope="supplier", target="metro cash and carry", directive="avoid_supplier", note="n"), "SKU003")
     assert (avoid.directive, avoid.target, avoid.scope) == ("avoid_supplier", "SUP-MCC", "supplier")
